@@ -1,0 +1,17 @@
+# Environment files
+.env
+
+# Virtual environments
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated pipeline output
+output/*
+!output/.gitkeep
+
+# OS files
+.DS_Store
