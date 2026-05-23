@@ -35,54 +35,60 @@ def seconds_to_srt_timestamp(seconds: float) -> str:
 def build_script(source_text: str) -> dict:
     """Return a hardcoded example script while preserving the source input."""
     return {
-        "title": "Toddler Neck Swelling: What Parents Should Watch",
+        "title": "Fever Medicine Dosage for a 14kg Child",
         "source_file": str(INPUT_FILE.relative_to(BASE_DIR)),
         "source_text": source_text.strip(),
         "narration": (
-            "A toddler comes home with sudden swelling on the back of the neck. "
-            "That can be scary for any parent.\n\n"
-            "A delayed reaction from an old mosquito bite is one possible cause. "
-            "A mild skin irritation or an early local infection could also explain it.\n\n"
-            "If the child seems comfortable and has no fever, the situation may not be urgent. "
-            "But parents should watch for spreading redness, pain, discharge, or worsening swelling.\n\n"
-            "If those warning signs appear, or the swelling does not improve, a pediatric or dermatology visit is a good next step."
+            "Most parents don't know this.\n\n"
+            "If your child is around 14 kilograms, giving the wrong fever medicine dose can be dangerous.\n\n"
+            "For acetaminophen, the typical amount is about 4.5 to 6.7 milliliters, depending on the medicine concentration.\n\n"
+            "For ibuprofen, it is about 3.6 to 7.2 milliliters.\n\n"
+            "But the most important step is to check the concentration on the medicine label.\n\n"
+            "Never use a regular spoon. Always use the measuring cup or syringe that comes with the medicine.\n\n"
+            "If you are not sure, ask a doctor or pharmacist."
         ),
         "scenes": [
             {
                 "start": 0.0,
-                "end": 4.0,
-                "caption": "Sudden neck swelling can worry any parent",
-                "visual_keyword": "parent checking toddler neck",
+                "end": 3.0,
+                "caption": "Most parents don't know this",
+                "visual_keyword": "worried parent sick child",
             },
             {
-                "start": 4.0,
-                "end": 8.0,
-                "caption": "An old mosquito bite can flare up again",
-                "visual_keyword": "mosquito bite child skin",
+                "start": 3.0,
+                "end": 7.0,
+                "caption": "Wrong fever dose can be dangerous",
+                "visual_keyword": "child fever thermometer",
             },
             {
-                "start": 8.0,
-                "end": 12.0,
-                "caption": "Skin irritation or mild infection is also possible",
-                "visual_keyword": "child skin irritation close up",
+                "start": 7.0,
+                "end": 11.0,
+                "caption": "Around 14kg child",
+                "visual_keyword": "toddler weight scale",
             },
             {
-                "start": 12.0,
+                "start": 11.0,
                 "end": 16.0,
-                "caption": "No fever or pain may mean it is less urgent",
-                "visual_keyword": "calm toddler home care",
+                "caption": "Acetaminophen: about 4.5-6.7 mL",
+                "visual_keyword": "children acetaminophen syrup",
             },
             {
                 "start": 16.0,
                 "end": 21.0,
-                "caption": "Watch for redness, discharge, or worsening swelling",
-                "visual_keyword": "parent monitoring symptoms",
+                "caption": "Ibuprofen: about 3.6-7.2 mL",
+                "visual_keyword": "children ibuprofen medicine",
             },
             {
                 "start": 21.0,
                 "end": 26.0,
-                "caption": "See a doctor if warning signs appear",
-                "visual_keyword": "pediatric consultation",
+                "caption": "Always check the medicine label",
+                "visual_keyword": "medicine label close up",
+            },
+            {
+                "start": 26.0,
+                "end": 30.0,
+                "caption": "Use a measuring cup, not a spoon",
+                "visual_keyword": "medicine measuring cup syringe",
             },
         ],
     }
