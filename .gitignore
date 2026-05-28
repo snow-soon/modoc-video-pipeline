@@ -20,3 +20,4 @@ output/*.wav
 output/*.mp3
 output/*.json
 output/*.srt
+assets/
