@@ -1,1 +1,4 @@
-# No external dependencies are required for the current MVP.
+google-genai
+moviepy
+python-dotenv
+requests
