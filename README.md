@@ -1,222 +1,173 @@
 # Modoc Video Pipeline
 
-AI-powered semi-automated short-form video generation pipeline for medical Q&A content.
+Human-script-first semi-automated short-form video pipeline for Korean medical content.
 
 ## Overview
 
-This project converts medically reviewed Q&A content into a short-form vertical video using Large Language Models (LLMs), Text-to-Speech (TTS), stock media retrieval, and automated video rendering.
+This pipeline treats the human-written script as the source of truth.
 
-The goal is not full end-to-end automation, but rather a **semi-automated workflow** that significantly reduces manual video production effort.
+The script is finalized by a human first. After that, the pipeline automates:
 
----
+1. script parsing and validation
+2. exact narration assembly
+3. Gemini TTS generation
+4. caption timing from authored caption blocks
+5. Pexels asset search
+6. stock video download
+7. MoviePy rendering
 
-## Current Pipeline
+This keeps medical wording under human control while still automating the repetitive production steps.
 
-```text
-Medical Q&A
-    ↓
-Gemini Script Generation
-    ↓
-Structured Scene Planning
-    ↓
-Gemini TTS Generation
-    ↓
-Subtitle Generation
-    ↓
-Pexels Asset Retrieval
-    ↓
-Stock Video Download
-    ↓
-MoviePy Rendering
-    ↓
-final_video.mp4
+## Why This Direction
+
+The previous version gave too much control to AI script generation. That caused:
+
+- inconsistent script quality
+- weak visual matching
+- awkward caption splitting
+- poor subtitle sync
+- stale outputs across runs
+- scene timing unrelated to narration meaning
+
+The current pipeline improves medical accuracy, visual relevance, and caption quality by making the script plan human-authored.
+
+## Input
+
+Edit the script plan before running:
+
+`input/script_plan.example.json`
+
+Example shape:
+
+```json
+{
+  "title": "아이 목 뒤가 갑자기 부었을 때 확인할 점",
+  "language": "ko",
+  "global_avoid_visuals": [
+    "thermometer",
+    "red thermometer",
+    "37 degree thermometer",
+    "fever threshold",
+    "clinical lymph node diagram",
+    "surgery",
+    "severe hospital emergency scene"
+  ],
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "아이 목 뒤가 갑자기 부었다면 많이 걱정되실 수 있어요.",
+      "captions": [
+        "아이 목 뒤가 갑자기 부었다면",
+        "많이 걱정되실 수 있어요"
+      ],
+      "visual_keywords": [
+        "parent checking child neck",
+        "child neck discomfort",
+        "parent caring for child"
+      ],
+      "avoid_visuals": [
+        "red thermometer",
+        "37 degree fever thermometer",
+        "clinical lymph node diagram"
+      ]
+    }
+  ]
+}
 ```
 
----
-
-## Features
-
-### 1. AI Script Generation
-
-Input medical Q&A content is transformed into:
-
-* Video title
-* Narration script
-* Scene structure
-* Visual search keywords
-
-Generated outputs:
+## Pipeline
 
 ```text
+Human script plan JSON
+    ↓
+generate_script.py
+    ↓
 output/script.json
 output/narration.txt
-```
-
----
-
-### 2. Gemini TTS Integration
-
-Uses Gemini TTS models to generate narration audio automatically.
-
-Generated output:
-
-```text
+    ↓
+generate_tts.py
+    ↓
 output/narration.wav
-```
-
----
-
-### 3. Automatic Subtitle Generation
-
-Creates subtitle files directly from narration text.
-
-Generated output:
-
-```text
+    ↓
+generate_captions.py
+    ↓
 output/captions.srt
-```
-
-Goals:
-
-* Korean-first narration
-* TTS and subtitles use identical source text
-* Automatic timing distribution
-* Caption-safe layout
-
----
-
-### 4. Stock Media Retrieval
-
-Uses the Pexels API to:
-
-* Search stock videos
-* Match scene keywords
-* Retrieve downloadable assets
-
-Generated output:
-
-```text
+output/timing_plan.json
+    ↓
+search_assets.py
+    ↓
 output/assets.json
-```
-
----
-
-### 5. Asset Download Pipeline
-
-Downloads selected stock footage locally.
-
-Generated output:
-
-```text
-assets/scene_1.mp4
-assets/scene_2.mp4
-...
-```
-
----
-
-### 6. Automated Video Rendering
-
-Uses MoviePy to combine:
-
-* Stock footage
-* Narration audio
-* Captions
-
-into a vertical short-form video.
-
-Generated output:
-
-```text
+    ↓
+download_assets.py
+    ↓
+assets/{block_id}.mp4
+    ↓
+render_video.py
+    ↓
 output/final_video.mp4
 ```
 
----
-
-## Tech Stack
-
-### AI / LLM
-
-* Gemini 2.5 Flash
-* Gemini TTS
-
-### Media
-
-* Pexels API
-* MoviePy
-* FFmpeg
-
-### Language
-
-* Python
-
----
-
-## Project Structure
+## Files
 
 ```text
 modoc-video-pipeline/
-
 ├── input/
-│   └── medical_qna.txt
-│
+│   ├── medical_qna.example.txt
+│   └── script_plan.example.json
 ├── output/
 │   ├── script.json
 │   ├── narration.txt
 │   ├── narration.wav
 │   ├── captions.srt
+│   ├── timing_plan.json
 │   ├── assets.json
 │   └── final_video.mp4
-│
 ├── assets/
-│   ├── scene_1.mp4
-│   ├── scene_2.mp4
-│   └── ...
-│
+│   └── {block_id}.mp4
 ├── src/
 │   ├── generate_script.py
 │   ├── generate_tts.py
 │   ├── generate_captions.py
 │   ├── search_assets.py
 │   ├── download_assets.py
-│   └── render_video.py
-│
+│   ├── render_video.py
+│   └── main.py
 └── README.md
 ```
 
----
+## Environment Variables
 
-## Current Status
+Create `.env` from `.env.example` and set:
 
-### Implemented
+- `GEMINI_API_KEY`
+- `PEXELS_API_KEY`
 
-* Gemini script generation
-* Gemini TTS integration
-* Subtitle generation
-* Pexels asset search
-* Stock footage download
-* Automated video rendering
-* End-to-end MVP workflow
+## Install
 
-### In Progress
-
-* Improved subtitle synchronization
-* Better caption layout
-* Audio/video timing alignment
-* Media quality matching
-* Human review workflow
-
----
-
-## Future Improvements
-
-* Word-level subtitle synchronization
-* AI-based asset ranking
-* Automated scene timing
-* Caption animations
-* Human-in-the-loop review tools
-* Multi-language video generation
-* Production-grade rendering pipeline
-
+```bash
+pip install -r requirements.txt
 ```
+
+MoviePy also requires a working FFmpeg installation on the machine.
+
+## Run
+
+Manual step:
+
+1. Edit `input/script_plan.example.json`
+
+Run command:
+
+```bash
+python3 src/main.py
 ```
+
+## Outputs
+
+- `output/script.json`: validated structured script
+- `output/narration.txt`: exact text used for TTS
+- `output/narration.wav`: Gemini TTS output
+- `output/captions.srt`: authored captions with proportional timing
+- `output/timing_plan.json`: block-level and caption-level timing data
+- `output/assets.json`: selected Pexels assets per block
+- `output/final_video.mp4`: rendered final video

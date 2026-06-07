@@ -1,0 +1,96 @@
+{
+  "title": "아이 목 뒤가 갑자기 부었을 때 확인할 점",
+  "language": "ko",
+  "global_avoid_visuals": [
+    "thermometer",
+    "red thermometer",
+    "37 degree thermometer",
+    "fever threshold",
+    "clinical lymph node diagram",
+    "surgery",
+    "severe hospital emergency scene"
+  ],
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "아이 목 뒤가 갑자기 부었다면 많이 걱정되실 수 있어요.",
+      "captions": [
+        "아이 목 뒤가 갑자기 부었다면",
+        "많이 걱정되실 수 있어요"
+      ],
+      "visual_keywords": [
+        "parent checking child neck",
+        "child neck discomfort",
+        "parent caring for child"
+      ],
+      "avoid_visuals": [
+        "red thermometer",
+        "37 degree fever thermometer",
+        "clinical lymph node diagram"
+      ]
+    },
+    {
+      "id": "explanation",
+      "narration": "목 뒤 붓기는 단순한 피부 자극일 수도 있지만, 림프절이 부은 경우도 원인일 수 있습니다.",
+      "captions": [
+        "단순한 피부 자극일 수도 있지만",
+        "림프절이 부은 경우도 있어요"
+      ],
+      "visual_keywords": [
+        "parent checking child neck",
+        "child resting at home",
+        "pediatric consultation"
+      ],
+      "avoid_visuals": [
+        "clinical lymph node diagram"
+      ]
+    },
+    {
+      "id": "warning",
+      "narration": "통증이 있거나, 붉어짐이 번지거나, 열이 나거나, 고름이 보이면 진료가 필요할 수 있어요.",
+      "captions": [
+        "통증, 붉어짐, 열, 고름이 보이면",
+        "진료가 필요할 수 있어요"
+      ],
+      "visual_keywords": [
+        "parent monitoring child symptoms",
+        "pediatric consultation",
+        "child resting at home"
+      ],
+      "avoid_visuals": [
+        "thermometer",
+        "red thermometer",
+        "37 degree thermometer",
+        "fever threshold"
+      ]
+    },
+    {
+      "id": "observe",
+      "narration": "아이가 평소처럼 잘 놀고 붓기가 커지지 않는다면 잠시 지켜볼 수 있습니다.",
+      "captions": [
+        "아이가 평소처럼 잘 놀고",
+        "붓기가 커지지 않는다면 지켜볼 수 있어요"
+      ],
+      "visual_keywords": [
+        "child resting at home",
+        "parent caring for child",
+        "calm child at home"
+      ],
+      "avoid_visuals": []
+    },
+    {
+      "id": "closing",
+      "narration": "하지만 붓기가 계속 커지거나 며칠이 지나도 좋아지지 않으면 소아청소년과에서 확인해 주세요.",
+      "captions": [
+        "붓기가 커지거나 좋아지지 않으면",
+        "소아청소년과에서 확인해 주세요"
+      ],
+      "visual_keywords": [
+        "pediatric consultation",
+        "doctor talking with parent",
+        "parent and child clinic"
+      ],
+      "avoid_visuals": []
+    }
+  ]
+}

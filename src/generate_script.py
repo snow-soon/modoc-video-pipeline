@@ -1,93 +1,169 @@
-"""Generate a Korean-first short-form script from the source medical Q&A."""
+"""Build the production script from a human-authored script plan."""
 
 import json
-import os
+import re
 from pathlib import Path
-
-from dotenv import load_dotenv
-from google import genai
+from typing import Optional
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-INPUT_FILE = BASE_DIR / "input" / "medical_qna.example.txt"
+INPUT_FILE = BASE_DIR / "input" / "script_plan.example.json"
 OUTPUT_DIR = BASE_DIR / "output"
 SCRIPT_FILE = OUTPUT_DIR / "script.json"
+NARRATION_TEXT_FILE = OUTPUT_DIR / "narration.txt"
+
+SAFE_BLOCK_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def clean_json_response(content: str) -> str:
-    """Strip Markdown code fences from a model response."""
-    return content.replace("```json", "").replace("```", "").strip()
+def normalize_text(text: str) -> str:
+    """Collapse whitespace while preserving natural sentence spacing."""
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def build_prompt(source_text: str) -> str:
-    """Create the Gemini prompt for a Korean short-form script."""
-    return f"""
-다음의 의료 검토 기반 부모 상담 Q&A를 바탕으로 한국어 숏폼 영상 스크립트를 만들어 주세요.
+def normalize_text_list(
+    value: object, field_name: str, block_id: Optional[str] = None
+) -> list[str]:
+    """Validate and normalize a non-empty list of strings."""
+    if not isinstance(value, list):
+        location = f"block '{block_id}'" if block_id else "script plan"
+        raise ValueError(f"{location}: '{field_name}' must be a list.")
 
-중요 규칙:
-- 반드시 한국어로 작성하세요.
-- 부모가 듣기 쉬운 자연스러운 한국어 말투를 사용하세요.
-- 내레이션은 약 35초~50초 분량의 숏폼 스타일로 작성하세요.
-- 원문에 없는 의학적 사실을 추가하지 마세요.
-- 마지막에는 "증상이 심해지거나 걱정되면 소아청소년과 진료를 받으세요."와 같은 안전 문구를 꼭 포함하세요.
-- scene caption은 짧은 한국어 구절로 작성하세요.
-- visual_keyword는 Pexels 검색용이므로 영어로 작성하세요.
-- scenes에는 start/end를 넣지 마세요.
-- 반드시 유효한 JSON만 반환하세요. 설명, 코드블록, 주석은 금지입니다.
+    normalized_items = [normalize_text(str(item)) for item in value if normalize_text(str(item))]
+    if not normalized_items:
+        location = f"block '{block_id}'" if block_id else "script plan"
+        raise ValueError(f"{location}: '{field_name}' must be non-empty.")
 
-반환 형식:
-{{
-  "title": "...",
-  "narration": "...",
-  "scenes": [
-    {{
-      "caption": "...",
-      "visual_keyword": "..."
-    }}
-  ]
-}}
+    deduped_items = []
+    seen = set()
+    for item in normalized_items:
+        if item not in seen:
+            deduped_items.append(item)
+            seen.add(item)
+    return deduped_items
 
-원문 Q&A:
-{source_text}
-""".strip()
+
+def load_script_plan() -> dict:
+    """Read the human-authored script plan JSON file."""
+    if not INPUT_FILE.exists():
+        raise FileNotFoundError(f"Missing input script plan: {INPUT_FILE}")
+
+    try:
+        return json.loads(INPUT_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid JSON in {INPUT_FILE}: {error}") from error
+
+
+def validate_block_id(block_id: str, seen_ids: set[str]) -> str:
+    """Validate one block id."""
+    normalized_id = normalize_text(block_id)
+    if not normalized_id:
+        raise ValueError("Each block requires a non-empty 'id'.")
+    if not SAFE_BLOCK_ID_PATTERN.match(normalized_id):
+        raise ValueError(
+            f"Block id '{normalized_id}' is invalid. Use only letters, numbers, '_' or '-'."
+        )
+    if normalized_id in seen_ids:
+        raise ValueError(f"Duplicate block id found: '{normalized_id}'.")
+    seen_ids.add(normalized_id)
+    return normalized_id
+
+
+def validate_script_plan(script_plan: dict) -> dict:
+    """Validate and normalize the human-authored plan."""
+    if not isinstance(script_plan, dict):
+        raise ValueError("Script plan must be a JSON object.")
+
+    title = normalize_text(str(script_plan.get("title", "")))
+    if not title:
+        raise ValueError("Script plan requires a non-empty 'title'.")
+
+    language = normalize_text(str(script_plan.get("language", "")))
+    if not language:
+        raise ValueError("Script plan requires a non-empty 'language'.")
+
+    blocks = script_plan.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
+        raise ValueError("Script plan requires a non-empty 'blocks' list.")
+
+    global_avoid_visuals = script_plan.get("global_avoid_visuals", [])
+    if global_avoid_visuals:
+        global_avoid_visuals = normalize_text_list(global_avoid_visuals, "global_avoid_visuals")
+    else:
+        global_avoid_visuals = []
+
+    seen_ids: set[str] = set()
+    normalized_blocks = []
+
+    for index, raw_block in enumerate(blocks, start=1):
+        if not isinstance(raw_block, dict):
+            raise ValueError(f"Block {index} must be a JSON object.")
+
+        block_id = validate_block_id(str(raw_block.get("id", "")), seen_ids)
+        narration = normalize_text(str(raw_block.get("narration", "")))
+        if not narration:
+            raise ValueError(f"block '{block_id}': 'narration' must be non-empty.")
+
+        captions = normalize_text_list(raw_block.get("captions"), "captions", block_id)
+        visual_keywords = normalize_text_list(
+            raw_block.get("visual_keywords"), "visual_keywords", block_id
+        )
+        avoid_visuals = raw_block.get("avoid_visuals", [])
+        if avoid_visuals:
+            avoid_visuals = normalize_text_list(avoid_visuals, "avoid_visuals", block_id)
+        else:
+            avoid_visuals = []
+
+        merged_avoid_visuals = []
+        seen_visuals = set()
+        for item in global_avoid_visuals + avoid_visuals:
+            if item not in seen_visuals:
+                merged_avoid_visuals.append(item)
+                seen_visuals.add(item)
+
+        normalized_blocks.append(
+            {
+                "id": block_id,
+                "narration": narration,
+                "captions": captions,
+                "visual_keywords": visual_keywords,
+                "avoid_visuals": merged_avoid_visuals,
+            }
+        )
+
+    full_narration = "\n".join(block["narration"] for block in normalized_blocks)
+    if not normalize_text(full_narration):
+        raise ValueError("Combined narration is empty after normalization.")
+
+    return {
+        "title": title,
+        "language": language,
+        "narration": full_narration,
+        "blocks": normalized_blocks,
+    }
+
+
+def write_outputs(script: dict) -> None:
+    """Write script.json and narration.txt."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    SCRIPT_FILE.write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
+    NARRATION_TEXT_FILE.write_text(script["narration"], encoding="utf-8")
 
 
 def generate_script() -> dict:
-    """Generate the structured Korean script with Gemini and save it."""
-    load_dotenv()
+    """Parse the human-authored script plan and build pipeline outputs."""
+    script_plan = load_script_plan()
+    script = validate_script_plan(script_plan)
+    write_outputs(script)
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("Missing GEMINI_API_KEY in environment.")
-
-    if not INPUT_FILE.exists():
-        raise FileNotFoundError(f"Missing input file: {INPUT_FILE}")
-
-    OUTPUT_DIR.mkdir(exist_ok=True)
-
-    source_text = INPUT_FILE.read_text(encoding="utf-8").strip()
-    client = genai.Client(api_key=api_key)
-
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=build_prompt(source_text),
-    )
-
-    raw_content = response.text or ""
-    script = json.loads(clean_json_response(raw_content))
-
-    SCRIPT_FILE.write_text(
-        json.dumps(script, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    print(f"Created {SCRIPT_FILE}")
-    print(f"Generated {len(script.get('scenes', []))} Korean scenes")
+    print(f"Blocks: {len(script['blocks'])}")
+    print(f"Narration characters: {len(script['narration'])}")
+    print(f"Wrote {SCRIPT_FILE}")
+    print(f"Wrote {NARRATION_TEXT_FILE}")
     return script
 
 
 def main() -> None:
-    """Generate and save the Korean script JSON."""
+    """Build output files from the human-authored script plan."""
     generate_script()
 
 

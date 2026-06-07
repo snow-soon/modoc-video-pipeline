@@ -1,4 +1,4 @@
-"""Generate Korean narration audio from the exact script narration text."""
+"""Generate Korean narration audio from the exact human-authored narration."""
 
 import json
 import os
@@ -15,6 +15,8 @@ OUTPUT_DIR = BASE_DIR / "output"
 SCRIPT_FILE = OUTPUT_DIR / "script.json"
 NARRATION_TEXT_FILE = OUTPUT_DIR / "narration.txt"
 AUDIO_FILE = OUTPUT_DIR / "narration.wav"
+TTS_MODEL = "gemini-2.5-flash-preview-tts"
+TTS_VOICE = "Kore"
 
 
 def load_script() -> dict:
@@ -48,16 +50,19 @@ def generate_tts() -> Path:
     # Save the exact text before sending it to TTS so text and audio stay aligned.
     save_narration_text(narration_text)
 
+    print(f"Narration character count: {len(narration_text)}")
+    print(f"TTS model: {TTS_MODEL}")
+
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        model="gemini-2.5-flash-preview-tts",
+        model=TTS_MODEL,
         contents=narration_text,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Kore"
+                        voice_name=TTS_VOICE
                     )
                 )
             ),
@@ -73,6 +78,7 @@ def generate_tts() -> Path:
         wave_file.writeframes(audio_data)
 
     print(f"Created {AUDIO_FILE}")
+    print(f"Output audio path: {AUDIO_FILE}")
     return AUDIO_FILE
 
 

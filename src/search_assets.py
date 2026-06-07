@@ -1,70 +1,133 @@
-import os
+"""Search Pexels assets using human-authored visual keywords."""
+
 import json
-import requests
+import os
 from pathlib import Path
+from typing import Optional
+
+import requests
 from dotenv import load_dotenv
 
-load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = BASE_DIR / "output"
+SCRIPT_FILE = OUTPUT_DIR / "script.json"
+ASSETS_FILE = OUTPUT_DIR / "assets.json"
+PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
+REQUEST_TIMEOUT = 30
 
-with open(OUTPUT_DIR / "script.json", "r", encoding="utf-8") as f:
-    data = json.load(f)
 
-headers = {
-    "Authorization": os.getenv("PEXELS_API_KEY")
-}
+def load_script() -> dict:
+    """Read the parsed script JSON."""
+    if not SCRIPT_FILE.exists():
+        raise FileNotFoundError(f"Missing script file: {SCRIPT_FILE}")
+    return json.loads(SCRIPT_FILE.read_text(encoding="utf-8"))
 
-results = []
 
-for scene in data["scenes"]:
+def is_keyword_blocked(keyword: str, avoid_visuals: list[str]) -> bool:
+    """Skip keywords that violate the block's safety constraints."""
+    lowered_keyword = keyword.casefold()
+    for unsafe in avoid_visuals:
+        unsafe_lower = unsafe.casefold()
+        if unsafe_lower in lowered_keyword or lowered_keyword in unsafe_lower:
+            return True
+    return False
 
-    keyword = scene["visual_keyword"]
 
+def select_downloadable_video(result: dict) -> Optional[dict]:
+    """Pick the largest downloadable mp4 from one Pexels result."""
+    video_files = result.get("video_files", [])
+    mp4_files = [
+        video_file
+        for video_file in video_files
+        if video_file.get("file_type") == "video/mp4" and video_file.get("link")
+    ]
+    if not mp4_files:
+        return None
+    return sorted(mp4_files, key=lambda item: item.get("height") or 0, reverse=True)[0]
+
+
+def search_one_keyword(headers: dict, keyword: str) -> Optional[dict]:
+    """Search Pexels for one keyword and return the first usable result."""
     response = requests.get(
-        "https://api.pexels.com/videos/search",
+        PEXELS_SEARCH_URL,
         headers=headers,
-        params={
-            "query": keyword,
-            "per_page": 1
-        }
+        params={"query": keyword, "per_page": 5},
+        timeout=REQUEST_TIMEOUT,
     )
+    response.raise_for_status()
+    payload = response.json()
 
-    result = response.json()
+    for video in payload.get("videos", []):
+        selected_file = select_downloadable_video(video)
+        if selected_file:
+            return {
+                "pexels_page_url": video["url"],
+                "download_url": selected_file["link"],
+                "width": selected_file.get("width"),
+                "height": selected_file.get("height"),
+            }
+    return None
 
-    if result.get("videos"):
-        first_video = result["videos"][0]
 
-        video_files = first_video.get("video_files", [])
+def search_assets() -> Path:
+    """Search one stock asset per block using ordered human-authored keywords."""
+    load_dotenv()
+    api_key = os.getenv("PEXELS_API_KEY")
+    if not api_key:
+        raise EnvironmentError("Missing PEXELS_API_KEY in environment.")
 
-        # Prefer vertical-ish or HD mp4 files.
-        mp4_files = [
-            vf for vf in video_files
-            if vf.get("file_type") == "video/mp4" and vf.get("link")
-        ]
+    script = load_script()
+    headers = {"Authorization": api_key}
+    results = []
 
-        if not mp4_files:
-            print(f"No downloadable mp4 found for keyword: {keyword}")
-            continue
+    for block in script.get("blocks", []):
+        block_id = block["id"]
+        tried_keywords = []
+        selected_asset = None
 
-        # Choose the largest height available for better quality.
-        selected_file = sorted(
-            mp4_files,
-            key=lambda vf: vf.get("height") or 0,
-            reverse=True
-        )[0]
+        for keyword in block["visual_keywords"]:
+            if is_keyword_blocked(keyword, block.get("avoid_visuals", [])):
+                continue
 
-        results.append({
-            "caption": scene["caption"],
-            "keyword": keyword,
-            "pexels_page_url": first_video["url"],
-            "download_url": selected_file["link"],
-            "width": selected_file.get("width"),
-            "height": selected_file.get("height")
-        })
+            tried_keywords.append(keyword)
+            selected_asset = search_one_keyword(headers, keyword)
+            if selected_asset:
+                results.append(
+                    {
+                        "block_id": block_id,
+                        "selected_keyword": keyword,
+                        "all_keywords": block["visual_keywords"],
+                        "pexels_page_url": selected_asset["pexels_page_url"],
+                        "download_url": selected_asset["download_url"],
+                        "width": selected_asset["width"],
+                        "height": selected_asset["height"],
+                    }
+                )
+                print(f"Block: {block_id}")
+                print(f"Tried keywords: {tried_keywords}")
+                print(f"Selected keyword: {keyword}")
+                print(
+                    "Selected video dimensions: "
+                    f"{selected_asset['width']}x{selected_asset['height']}"
+                )
+                break
 
-with open(OUTPUT_DIR / "assets.json", "w", encoding="utf-8") as f:
-    json.dump(results, f, ensure_ascii=False, indent=2)
+        if selected_asset is None:
+            print(f"Block: {block_id}")
+            print(f"Tried keywords: {tried_keywords}")
+            print("Selected keyword: none")
+            print("Selected video dimensions: none")
 
-print("✅ assets.json created")
+    ASSETS_FILE.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Created {ASSETS_FILE}")
+    return ASSETS_FILE
+
+
+def main() -> None:
+    """Search assets for all blocks."""
+    search_assets()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,42 +1,37 @@
-"""Generate subtitles from the exact Korean narration text."""
+"""Generate captions and timing plans from human-authored caption blocks."""
 
-import re
+import json
 import wave
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = BASE_DIR / "output"
-NARRATION_TEXT_FILE = OUTPUT_DIR / "narration.txt"
+SCRIPT_FILE = OUTPUT_DIR / "script.json"
 AUDIO_FILE = OUTPUT_DIR / "narration.wav"
 CAPTIONS_FILE = OUTPUT_DIR / "captions.srt"
-
-MIN_CHUNK_LENGTH = 12
-MAX_CHUNK_LENGTH = 18
+TIMING_PLAN_FILE = OUTPUT_DIR / "timing_plan.json"
 
 
 def seconds_to_srt_timestamp(seconds: float) -> str:
     """Convert seconds into SRT timestamp format."""
     total_milliseconds = int(round(seconds * 1000))
-
     hours = total_milliseconds // 3_600_000
     minutes = (total_milliseconds % 3_600_000) // 60_000
     secs = (total_milliseconds % 60_000) // 1000
     milliseconds = total_milliseconds % 1000
-
     return f"{hours:02}:{minutes:02}:{secs:02},{milliseconds:03}"
 
 
-def load_narration_text() -> str:
-    """Read the exact narration text used for TTS."""
-    if not NARRATION_TEXT_FILE.exists():
-        raise FileNotFoundError(f"Missing narration text file: {NARRATION_TEXT_FILE}")
-
-    return NARRATION_TEXT_FILE.read_text(encoding="utf-8").strip()
+def load_script() -> dict:
+    """Read the parsed script JSON."""
+    if not SCRIPT_FILE.exists():
+        raise FileNotFoundError(f"Missing script file: {SCRIPT_FILE}")
+    return json.loads(SCRIPT_FILE.read_text(encoding="utf-8"))
 
 
 def get_audio_duration() -> float:
-    """Read the WAV duration without requiring MoviePy."""
+    """Read the WAV duration."""
     if not AUDIO_FILE.exists():
         raise FileNotFoundError(f"Missing narration audio file: {AUDIO_FILE}")
 
@@ -47,162 +42,121 @@ def get_audio_duration() -> float:
     return frame_count / float(frame_rate)
 
 
-def split_sentences(text: str) -> list[str]:
-    """Split narration into sentence-first chunks while preserving text content."""
-    normalized_text = re.sub(r"\r\n?", "\n", text)
-    raw_parts = re.split(r"(\n+|(?<=[.!?])\s+|(?<=요\.)\s*|(?<=다\.)\s*)", normalized_text)
+def build_timing_plan(script: dict, audio_duration: float) -> dict:
+    """Assign block and caption timings proportionally to authored text length."""
+    blocks = script.get("blocks", [])
+    if not blocks:
+        raise ValueError("script.json does not contain any blocks.")
 
-    sentences = []
-    current = ""
+    narration_weights = [max(len(block["narration"].replace(" ", "")), 1) for block in blocks]
+    total_weight = sum(narration_weights)
 
-    for part in raw_parts:
-        if not part:
-            continue
-
-        current += part
-
-        if "\n" in part or re.search(r"[.!?]\s*$", part) or re.search(r"(요\.|다\.)\s*$", part):
-            cleaned = current.strip()
-            if cleaned:
-                sentences.append(cleaned)
-            current = ""
-
-    if current.strip():
-        sentences.append(current.strip())
-
-    return sentences
-
-
-def split_long_chunk(chunk: str) -> list[str]:
-    """Split long Korean text into smaller subtitle chunks."""
-    compact_chunk = re.sub(r"\s+", " ", chunk).strip()
-
-    if len(compact_chunk) <= MAX_CHUNK_LENGTH:
-        return [compact_chunk]
-
-    words = compact_chunk.split(" ")
-
-    # Prefer word-based grouping first so the text stays natural.
-    grouped_chunks = []
-    current = ""
-
-    for word in words:
-        candidate = word if not current else f"{current} {word}"
-
-        if len(candidate) <= MAX_CHUNK_LENGTH:
-            current = candidate
-            continue
-
-        if current:
-            grouped_chunks.append(current)
-            current = word
-        else:
-            grouped_chunks.append(word[:MAX_CHUNK_LENGTH])
-            current = word[MAX_CHUNK_LENGTH:]
-
-    if current:
-        grouped_chunks.append(current)
-
-    final_chunks = []
-
-    for item in grouped_chunks:
-        if len(item) <= MAX_CHUNK_LENGTH:
-            final_chunks.append(item)
-            continue
-
-        start = 0
-        while start < len(item):
-            final_chunks.append(item[start : start + MAX_CHUNK_LENGTH])
-            start += MAX_CHUNK_LENGTH
-
-    # Merge tiny fragments back into the previous chunk when possible.
-    merged_chunks = []
-    for item in final_chunks:
-        if (
-            merged_chunks
-            and len(item) < MIN_CHUNK_LENGTH
-            and len(f"{merged_chunks[-1]} {item}") <= MAX_CHUNK_LENGTH + 4
-        ):
-            merged_chunks[-1] = f"{merged_chunks[-1]} {item}".strip()
-        else:
-            merged_chunks.append(item)
-
-    return [chunk.strip() for chunk in merged_chunks if chunk.strip()]
-
-
-def build_subtitle_chunks(text: str) -> list[str]:
-    """Split narration text into subtitle-sized chunks."""
-    subtitle_chunks = []
-
-    for sentence in split_sentences(text):
-        subtitle_chunks.extend(split_long_chunk(sentence))
-
-    if not subtitle_chunks:
-        raise ValueError("Narration text is empty or could not be split into captions.")
-
-    return subtitle_chunks
-
-
-def distribute_timings(chunks: list[str], audio_duration: float) -> list[dict]:
-    """Assign subtitle timings proportionally to text length."""
-    weights = [max(len(re.sub(r"\s+", "", chunk)), 1) for chunk in chunks]
-    total_weight = sum(weights)
-
-    timings = []
+    timed_blocks = []
     current_start = 0.0
 
-    for index, (chunk, weight) in enumerate(zip(chunks, weights), start=1):
-        if index == len(chunks):
-            current_end = audio_duration
+    for index, (block, block_weight) in enumerate(zip(blocks, narration_weights), start=1):
+        if index == len(blocks):
+            block_end = audio_duration
         else:
-            current_end = current_start + (audio_duration * weight / total_weight)
+            block_end = current_start + (audio_duration * block_weight / total_weight)
 
-        timings.append(
+        block_duration = max(block_end - current_start, 0.0)
+        caption_weights = [max(len(caption.replace(" ", "")), 1) for caption in block["captions"]]
+        caption_total_weight = sum(caption_weights)
+
+        timed_captions = []
+        caption_start = current_start
+        for caption_index, (caption_text, caption_weight) in enumerate(
+            zip(block["captions"], caption_weights), start=1
+        ):
+            if caption_index == len(block["captions"]):
+                caption_end = block_end
+            else:
+                caption_end = caption_start + (block_duration * caption_weight / caption_total_weight)
+
+            timed_captions.append(
+                {
+                    "text": caption_text,
+                    "start": caption_start,
+                    "end": caption_end,
+                }
+            )
+            caption_start = caption_end
+
+        timed_blocks.append(
             {
-                "index": index,
+                "id": block["id"],
                 "start": current_start,
-                "end": current_end,
-                "text": chunk,
+                "end": block_end,
+                "duration": block_duration,
+                "captions": timed_captions,
             }
         )
-        current_start = current_end
+        current_start = block_end
 
-    return timings
+    if timed_blocks:
+        timed_blocks[-1]["end"] = audio_duration
+        timed_blocks[-1]["duration"] = audio_duration - timed_blocks[-1]["start"]
+        if timed_blocks[-1]["captions"]:
+            timed_blocks[-1]["captions"][-1]["end"] = audio_duration
+
+    return {
+        "audio_duration": audio_duration,
+        "blocks": timed_blocks,
+    }
 
 
-def write_captions_srt(captions: list[dict]) -> None:
-    """Save the generated captions in SRT format."""
+def write_timing_plan(timing_plan: dict) -> None:
+    """Save timing_plan.json."""
+    TIMING_PLAN_FILE.write_text(
+        json.dumps(timing_plan, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"Created {TIMING_PLAN_FILE}")
+
+
+def write_captions_srt(timing_plan: dict) -> None:
+    """Save captions.srt from the timed caption blocks."""
     lines = []
+    caption_index = 1
 
-    for caption in captions:
-        lines.append(str(caption["index"]))
-        lines.append(
-            f"{seconds_to_srt_timestamp(caption['start'])} --> "
-            f"{seconds_to_srt_timestamp(caption['end'])}"
-        )
-        lines.append(caption["text"])
-        lines.append("")
+    for block in timing_plan["blocks"]:
+        for caption in block["captions"]:
+            lines.append(str(caption_index))
+            lines.append(
+                f"{seconds_to_srt_timestamp(caption['start'])} --> "
+                f"{seconds_to_srt_timestamp(caption['end'])}"
+            )
+            lines.append(caption["text"])
+            lines.append("")
+            caption_index += 1
 
     CAPTIONS_FILE.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
     print(f"Created {CAPTIONS_FILE}")
 
 
 def generate_captions() -> Path:
-    """Generate subtitles from the exact narration text and audio length."""
-    narration_text = load_narration_text()
+    """Generate timing_plan.json and captions.srt from human-authored caption blocks."""
+    script = load_script()
     audio_duration = get_audio_duration()
-    subtitle_chunks = build_subtitle_chunks(narration_text)
-    caption_timings = distribute_timings(subtitle_chunks, audio_duration)
+    timing_plan = build_timing_plan(script, audio_duration)
+    write_timing_plan(timing_plan)
+    write_captions_srt(timing_plan)
 
-    print(f"Narration duration: {audio_duration:.2f} seconds")
-    print(f"Generated {len(caption_timings)} subtitle chunks")
+    total_captions = sum(len(block["captions"]) for block in timing_plan["blocks"])
+    final_subtitle_end = 0.0
+    if timing_plan["blocks"] and timing_plan["blocks"][-1]["captions"]:
+        final_subtitle_end = timing_plan["blocks"][-1]["captions"][-1]["end"]
 
-    write_captions_srt(caption_timings)
+    print(f"Audio duration: {audio_duration:.2f} seconds")
+    print(f"Number of blocks: {len(timing_plan['blocks'])}")
+    print(f"Number of captions: {total_captions}")
+    print(f"Final subtitle end time: {final_subtitle_end:.2f} seconds")
     return CAPTIONS_FILE
 
 
 def main() -> None:
-    """Generate SRT captions from narration text and audio."""
+    """Generate block-based captions and timing data."""
     generate_captions()
 
 
