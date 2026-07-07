@@ -1,0 +1,138 @@
+{
+  "title": "Milk Coming Out of a Baby's Nose: What Parents Should Know",
+  "language": "en",
+  "avoid_visuals": [
+    "baby choking close up",
+    "blood",
+    "green vomit",
+    "emergency room",
+    "ambulance",
+    "cleft palate surgery",
+    "baby sleeping on stomach",
+    "graphic medical illustration"
+  ],
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "Seeing milk come out of your baby's nose after a feed can be scary, but it is not always an emergency.",
+      "captions": [
+        "Milk from the nose can look scary",
+        "but it is not always an emergency"
+      ],
+      "visual_keywords": [
+        "calm parent holding baby at home",
+        "mother holding infant close",
+        "parent comforting baby indoors"
+      ],
+      "avoid_visuals": [
+        "panicked parent",
+        "crying baby close up",
+        "hospital bed"
+      ]
+    },
+    {
+      "id": "why_it_happens",
+      "narration": "In young babies, spit up is common because the feeding and reflux system is still maturing. Sometimes milk comes back up and exits through the nose.",
+      "captions": [
+        "Spit up is common in young babies",
+        "Milk can sometimes come through the nose"
+      ],
+      "visual_keywords": [
+        "parent feeding baby bottle upright",
+        "baby feeding with parent",
+        "infant feeding calmly"
+      ],
+      "avoid_visuals": [
+        "vomit close up",
+        "baby struggling",
+        "medical diagram"
+      ]
+    },
+    {
+      "id": "feeding_support",
+      "narration": "Feeding in a slightly upright position, slowing a fast feed, and taking small pauses may help reduce spit up.",
+      "captions": [
+        "Try a slightly upright feed",
+        "Slow down and pause"
+      ],
+      "visual_keywords": [
+        "mother feeding baby upright",
+        "parent holding baby upright after feeding",
+        "baby feeding with parent"
+      ],
+      "avoid_visuals": [
+        "force feeding",
+        "baby bottle in crib",
+        "unsafe sleep position",
+        "7267552"
+      ]
+    },
+    {
+      "id": "after_feeding",
+      "narration": "After feeding, hold your baby upright for a little while. For sleep, keep your baby flat on the back on a safe sleep surface.",
+      "captions": [
+        "Hold upright after feeds",
+        "For sleep: flat on the back"
+      ],
+      "visual_keywords": [
+        "parent holding baby upright after feeding",
+        "baby sleeping on back in crib",
+        "safe infant sleep on back"
+      ],
+      "avoid_visuals": [
+        "inclined sleeper",
+        "baby sleeping on sofa",
+        "blankets covering baby face"
+      ]
+    },
+    {
+      "id": "red_flags",
+      "narration": "Call a doctor urgently if vomiting is forceful, green, yellow, or bloody, or if your baby has trouble breathing, refuses feeds, has fewer wet diapers, or is not gaining weight.",
+      "captions": [
+        "Know the warning signs",
+        "Breathing, feeding, diapers, weight"
+      ],
+      "visual_keywords": [
+        "parent checking baby diaper",
+        "mother changing baby diaper",
+        "parent feeding baby calmly",
+        "parent holding infant calmly"
+      ],
+      "avoid_visuals": [
+        "oxygen mask",
+        "baby in intensive care",
+        "parent crying",
+        "7423727",
+        "5998414",
+        "5998417",
+        "girl patient",
+        "older child",
+        "playing with baby",
+        "laptop",
+        "wooden rattle",
+        "6386559",
+        "7581435",
+        "adult patient",
+        "medical gloves"
+      ]
+    },
+    {
+      "id": "when_to_check",
+      "narration": "If milk comes through the nose often, or feeding is hard, your pediatrician can check for other causes, including anatomy of the palate. Do not try to diagnose it at home.",
+      "captions": [
+        "If it happens often",
+        "ask your pediatrician"
+      ],
+      "visual_keywords": [
+        "calm pediatric consultation infant",
+        "pediatrician speaking with parent baby",
+        "doctor smiling with baby parent"
+      ],
+      "avoid_visuals": [
+        "mouth surgery",
+        "severe diagnosis text",
+        "medical scan"
+      ]
+    }
+  ]
+}

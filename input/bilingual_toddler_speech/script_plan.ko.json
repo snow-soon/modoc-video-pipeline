@@ -1,0 +1,125 @@
+{
+  "title": "두 언어를 배우는 아이의 말 발달, 부모가 할 수 있는 것",
+  "language": "ko",
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "세 살에 가까운 아이가 두 언어를 배우고 있는데, 아직 자동차 대신 부릉부릉처럼 말하면 걱정될 수 있어요.",
+      "captions": [
+        "두 언어를 배우는 아이",
+        "아직 부릉부릉이라고 말한다면?"
+      ],
+      "visual_keywords": [
+        "parent playing with toddler toy car",
+        "toddler playing with parent at home",
+        "family reading with toddler"
+      ],
+      "avoid_visuals": [
+        "doctor diagnosis",
+        "child crying close up",
+        "hospital emergency",
+        "brain scan",
+        "autism text"
+      ]
+    },
+    {
+      "id": "bilingual_normal",
+      "narration": "이중언어 아이들은 한쪽 언어를 더 편하게 쓰거나, 두 언어의 단어를 섞어 쓰는 일이 있을 수 있습니다.",
+      "captions": [
+        "한쪽 언어가 더 편할 수 있어요",
+        "단어를 섞는 것도 배움의 과정일 수 있어요"
+      ],
+      "visual_keywords": [
+        "multilingual family talking at home",
+        "parent speaking with toddler",
+        "diverse family conversation"
+      ],
+      "avoid_visuals": [
+        "confused child alone",
+        "school failure",
+        "medical chart",
+        "speech disorder label"
+      ]
+    },
+    {
+      "id": "not_cause_delay",
+      "narration": "두 언어를 쓴다는 것만으로 말이 늦어지는 것은 아닙니다. 아이가 쓰는 언어 전반에서 의사소통이 어떤지 함께 보는 것이 중요합니다.",
+      "captions": [
+        "두 언어 자체가 지연의 원인은 아니에요",
+        "두 언어 전반의 의사소통을 보세요"
+      ],
+      "visual_keywords": [
+        "parent reading with toddler at home",
+        "parent listening to toddler",
+        "family playing together on couch"
+      ],
+      "avoid_visuals": [
+        "language test close up",
+        "diagnosis paperwork",
+        "worried parent crying",
+        "doctor pointing at chart",
+        "phone call",
+        "talking on the phone",
+        "crying baby",
+        "pacifier"
+      ]
+    },
+    {
+      "id": "model_words",
+      "narration": "아이가 부릉부릉이라고 말하면, 맞아 자동차가 부릉부릉 가네처럼 자연스럽게 단어를 들려주세요. 억지로 따라 하게 할 필요는 없습니다.",
+      "captions": [
+        "단어를 자연스럽게 들려주세요",
+        "억지로 말하게 하지 않아도 됩니다"
+      ],
+      "visual_keywords": [
+        "parent toddler toy car play",
+        "parent smiling with toddler toys",
+        "child playing with toy cars"
+      ],
+      "avoid_visuals": [
+        "strict teaching",
+        "child frustrated",
+        "flashcards close up",
+        "therapy session"
+      ]
+    },
+    {
+      "id": "daily_support",
+      "narration": "그림책을 읽고, 노래를 부르고, 일상 물건 이름을 말해 주세요. 아이가 어느 언어로든 대답할 시간을 주는 것도 도움이 됩니다.",
+      "captions": [
+        "책 읽기, 노래, 일상 단어",
+        "대답할 시간을 주세요"
+      ],
+      "visual_keywords": [
+        "parent reading picture book toddler",
+        "parent singing with toddler",
+        "toddler choosing book at home"
+      ],
+      "avoid_visuals": [
+        "tablet close up",
+        "screen addiction",
+        "overstimulating tv",
+        "classroom pressure"
+      ]
+    },
+    {
+      "id": "when_to_ask",
+      "narration": "그래도 걱정되거나 두 언어 모두에서 발달이 멈춘 것처럼 보인다면, 소아청소년과나 언어치료 전문가와 상담해 보세요.",
+      "captions": [
+        "걱정이 계속된다면",
+        "소아청소년과나 언어 전문가에게 상담하세요"
+      ],
+      "visual_keywords": [
+        "calm pediatric consultation",
+        "parent talking with pediatrician",
+        "speech therapist toddler play"
+      ],
+      "avoid_visuals": [
+        "emergency room",
+        "ambulance",
+        "panic scene",
+        "severe diagnosis"
+      ]
+    }
+  ]
+}

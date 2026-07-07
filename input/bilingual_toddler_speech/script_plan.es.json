@@ -1,0 +1,125 @@
+{
+  "title": "Habla bilingüe en niños pequeños: qué pueden hacer los padres",
+  "language": "es",
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "Si tu hijo tiene casi tres años, aprende dos idiomas y todavía dice rum rum en vez de coche, es normal que te preguntes si va bien.",
+      "captions": [
+        "Aprende dos idiomas",
+        "¿y todavía dice rum rum?"
+      ],
+      "visual_keywords": [
+        "parent playing with toddler toy car",
+        "toddler playing with parent at home",
+        "family reading with toddler"
+      ],
+      "avoid_visuals": [
+        "doctor diagnosis",
+        "child crying close up",
+        "hospital emergency",
+        "brain scan",
+        "autism text"
+      ]
+    },
+    {
+      "id": "bilingual_normal",
+      "narration": "Muchos niños bilingües usan un idioma más que el otro, y a veces mezclan palabras mientras están aprendiendo.",
+      "captions": [
+        "Un idioma puede estar más fuerte",
+        "y mezclar palabras puede pasar"
+      ],
+      "visual_keywords": [
+        "multilingual family talking at home",
+        "parent speaking with toddler",
+        "diverse family conversation"
+      ],
+      "avoid_visuals": [
+        "confused child alone",
+        "school failure",
+        "medical chart",
+        "speech disorder label"
+      ]
+    },
+    {
+      "id": "not_cause_delay",
+      "narration": "Usar dos idiomas no causa por sí solo un retraso del habla. Lo importante es observar cómo se comunica el niño en los idiomas que usa.",
+      "captions": [
+        "Dos idiomas no causan retraso por sí solos",
+        "Observa la comunicación en ambos idiomas"
+      ],
+      "visual_keywords": [
+        "parent reading with toddler at home",
+        "parent listening to toddler",
+        "family playing together on couch"
+      ],
+      "avoid_visuals": [
+        "language test close up",
+        "diagnosis paperwork",
+        "worried parent crying",
+        "doctor pointing at chart",
+        "phone call",
+        "talking on the phone",
+        "crying baby",
+        "pacifier"
+      ]
+    },
+    {
+      "id": "model_words",
+      "narration": "Cuando diga rum rum, puedes modelar la palabra con calma: sí, el coche hace rum rum. Hazlo como juego, no como presión.",
+      "captions": [
+        "Modela la palabra con calma",
+        "Como juego, no como presión"
+      ],
+      "visual_keywords": [
+        "parent toddler toy car play",
+        "parent smiling with toddler toys",
+        "child playing with toy cars"
+      ],
+      "avoid_visuals": [
+        "strict teaching",
+        "child frustrated",
+        "flashcards close up",
+        "therapy session"
+      ]
+    },
+    {
+      "id": "daily_support",
+      "narration": "Lean libros con imágenes, canten canciones, nombren objetos de cada día y dale tiempo para responder en cualquiera de los idiomas.",
+      "captions": [
+        "Lean, canten y nombren objetos",
+        "Dale tiempo para responder"
+      ],
+      "visual_keywords": [
+        "parent reading picture book toddler",
+        "parent singing with toddler",
+        "toddler choosing book at home"
+      ],
+      "avoid_visuals": [
+        "tablet close up",
+        "screen addiction",
+        "overstimulating tv",
+        "classroom pressure"
+      ]
+    },
+    {
+      "id": "when_to_ask",
+      "narration": "Si sigues preocupada, o si parece que no avanza en los dos idiomas, habla con su pediatra o con un especialista en habla y lenguaje.",
+      "captions": [
+        "Si la preocupación sigue",
+        "consulta con pediatra o habla y lenguaje"
+      ],
+      "visual_keywords": [
+        "calm pediatric consultation",
+        "parent talking with pediatrician",
+        "speech therapist toddler play"
+      ],
+      "avoid_visuals": [
+        "emergency room",
+        "ambulance",
+        "panic scene",
+        "severe diagnosis"
+      ]
+    }
+  ]
+}

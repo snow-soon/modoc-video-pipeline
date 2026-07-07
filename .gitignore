@@ -1,5 +1,17 @@
 # Environment files
 .env
+.env.*
+!.env.example
+
+# Local credentials and private keys
+*credentials*.json
+*service-account*.json
+*.pem
+*.key
+
+# Local content/source spreadsheets
+*.xlsx
+*.xls
 
 # Virtual environments
 venv/

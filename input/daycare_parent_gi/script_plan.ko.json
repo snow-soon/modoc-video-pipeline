@@ -1,0 +1,121 @@
+{
+  "title": "아이 어린이집 이후 계속 아픈 부모, 괜찮은 걸까?",
+  "language": "ko",
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "아이가 어린이집에 다니기 시작한 뒤, 부모까지 계속 아프다면 정말 지칠 수 있어요.",
+      "captions": [
+        "아이 어린이집 이후",
+        "부모까지 계속 아프다면?"
+      ],
+      "visual_keywords": [
+        "tired mother at home",
+        "parent caring for child at home",
+        "exhausted parent indoors"
+      ],
+      "avoid_visuals": [
+        "hospital emergency",
+        "surgery",
+        "severe illness",
+        "crying baby close up"
+      ]
+    },
+    {
+      "id": "daycare_effect",
+      "narration": "단체 생활을 시작하면 아이가 새로운 바이러스나 세균에 노출되고, 가족도 감염병에 더 자주 걸릴 수 있습니다.",
+      "captions": [
+        "어린이집을 시작하면",
+        "가족도 더 자주 아플 수 있어요"
+      ],
+      "visual_keywords": [
+        "children daycare classroom",
+        "kids playing indoors",
+        "parent and child entering daycare"
+      ],
+      "avoid_visuals": [
+        "sick child crying",
+        "medical emergency",
+        "infection animation",
+        "virus close up"
+      ]
+    },
+    {
+      "id": "gi_symptoms",
+      "narration": "하지만 몇 달 동안 복통, 경련, 설사가 반복된다면 단순히 어린이집 때문이라고만 넘기기는 어렵습니다.",
+      "captions": [
+        "하지만 몇 달째 반복되는 복통과 설사라면",
+        "그냥 넘기기는 어려워요"
+      ],
+      "visual_keywords": [
+        "woman holding stomach at home",
+        "adult stomach discomfort",
+        "person sitting on couch unwell"
+      ],
+      "avoid_visuals": [
+        "toilet scene",
+        "graphic diarrhea",
+        "vomiting close up",
+        "blood"
+      ]
+    },
+    {
+      "id": "specialist",
+      "narration": "소화기내과 진료를 예약한 것은 좋은 결정이고, 기다리는 동안 증상 일지를 적어두면 도움이 됩니다.",
+      "captions": [
+        "소화기내과 예약은 좋은 결정이에요",
+        "기다리는 동안 증상 일지를 적어보세요"
+      ],
+      "visual_keywords": [
+        "doctor consultation with adult patient",
+        "woman writing health journal",
+        "person taking notes at desk"
+      ],
+      "avoid_visuals": [
+        "surgery",
+        "emergency room",
+        "medical procedure",
+        "scary hospital"
+      ]
+    },
+    {
+      "id": "symptom_log",
+      "narration": "무엇을 먹었는지, 언제 통증이나 설사가 있었는지, 다른 증상은 없었는지 간단히 기록해 보세요.",
+      "captions": [
+        "먹은 음식",
+        "증상이 생긴 시간",
+        "함께 나타난 증상을 기록하세요"
+      ],
+      "visual_keywords": [
+        "food diary notebook",
+        "health journal writing",
+        "calendar notes on desk"
+      ],
+      "avoid_visuals": [
+        "diet advertisement",
+        "weight loss",
+        "supplement commercial",
+        "extreme food restriction"
+      ]
+    },
+    {
+      "id": "closing",
+      "narration": "이 기록은 나중에 의사에게 정확히 설명하는 데 큰 도움이 될 수 있습니다.",
+      "captions": [
+        "기록은 진료 때",
+        "정확한 설명에 도움이 됩니다"
+      ],
+      "visual_keywords": [
+        "patient talking with doctor",
+        "doctor reviewing notes",
+        "calm medical consultation"
+      ],
+      "avoid_visuals": [
+        "emergency surgery",
+        "panic scene",
+        "ambulance",
+        "severe hospital emergency"
+      ]
+    }
+  ]
+}

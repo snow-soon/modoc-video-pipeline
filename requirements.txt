@@ -1,5 +1,8 @@
 google-genai
+imageio
+imageio-ffmpeg
 moviepy
+pillow
 python-dotenv
 requests
 pillow

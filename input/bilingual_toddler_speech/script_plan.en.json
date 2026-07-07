@@ -1,0 +1,125 @@
+{
+  "title": "Bilingual Toddler Speech: What Parents Can Do",
+  "language": "en",
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "If your almost three year old is learning two languages and still says things like vroom vroom instead of car, it can feel confusing.",
+      "captions": [
+        "Learning two languages",
+        "and still saying vroom vroom?"
+      ],
+      "visual_keywords": [
+        "parent playing with toddler toy car",
+        "toddler playing with parent at home",
+        "family reading with toddler"
+      ],
+      "avoid_visuals": [
+        "doctor diagnosis",
+        "child crying close up",
+        "hospital emergency",
+        "brain scan",
+        "autism text"
+      ]
+    },
+    {
+      "id": "bilingual_normal",
+      "narration": "Many bilingual children use one language more than the other, and mixing words can be part of learning.",
+      "captions": [
+        "One language may be stronger",
+        "and mixing words can happen"
+      ],
+      "visual_keywords": [
+        "multilingual family talking at home",
+        "parent speaking with toddler",
+        "diverse family conversation"
+      ],
+      "avoid_visuals": [
+        "confused child alone",
+        "school failure",
+        "medical chart",
+        "speech disorder label"
+      ]
+    },
+    {
+      "id": "not_cause_delay",
+      "narration": "Using two languages does not cause speech delay by itself. What matters is whether communication concerns show up across the languages the child uses.",
+      "captions": [
+        "Two languages do not cause delay by themselves",
+        "Look at communication across both languages"
+      ],
+      "visual_keywords": [
+        "parent reading with toddler at home",
+        "parent listening to toddler",
+        "family playing together on couch"
+      ],
+      "avoid_visuals": [
+        "language test close up",
+        "diagnosis paperwork",
+        "worried parent crying",
+        "doctor pointing at chart",
+        "phone call",
+        "talking on the phone",
+        "crying baby",
+        "pacifier"
+      ]
+    },
+    {
+      "id": "model_words",
+      "narration": "When your child says vroom vroom, gently model the word: yes, the car goes vroom. Keep it playful, not pressured.",
+      "captions": [
+        "Gently model the word",
+        "Keep it playful, not pressured"
+      ],
+      "visual_keywords": [
+        "parent toddler toy car play",
+        "parent smiling with toddler toys",
+        "child playing with toy cars"
+      ],
+      "avoid_visuals": [
+        "strict teaching",
+        "child frustrated",
+        "flashcards close up",
+        "therapy session"
+      ]
+    },
+    {
+      "id": "daily_support",
+      "narration": "Read picture books, sing songs, name everyday objects, and give your child time to answer in either language.",
+      "captions": [
+        "Read, sing, name everyday objects",
+        "Give time to answer"
+      ],
+      "visual_keywords": [
+        "parent reading picture book toddler",
+        "parent singing with toddler",
+        "toddler choosing book at home"
+      ],
+      "avoid_visuals": [
+        "tablet close up",
+        "screen addiction",
+        "overstimulating tv",
+        "classroom pressure"
+      ]
+    },
+    {
+      "id": "when_to_ask",
+      "narration": "If you are worried, or if progress seems stalled across both languages, talk with your pediatrician or a speech language pathologist.",
+      "captions": [
+        "If you are worried",
+        "ask a pediatrician or speech-language pathologist"
+      ],
+      "visual_keywords": [
+        "calm pediatric consultation",
+        "parent talking with pediatrician",
+        "speech therapist toddler play"
+      ],
+      "avoid_visuals": [
+        "emergency room",
+        "ambulance",
+        "panic scene",
+        "severe diagnosis"
+      ]
+    }
+  ]
+}

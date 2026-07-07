@@ -1,0 +1,121 @@
+{
+  "title": "Enfermarse seguido después de la guardería: qué pueden hacer los padres",
+  "language": "es",
+  "blocks": [
+    {
+      "id": "hook",
+      "narration": "Si tu hijo empezó la guardería y ahora sientes que estás enferma todo el tiempo, puede ser agotador.",
+      "captions": [
+        "¿Tu hijo empezó la guardería",
+        "y ahora te enfermas todo el tiempo?"
+      ],
+      "visual_keywords": [
+        "tired mother at home",
+        "parent caring for child at home",
+        "exhausted parent indoors"
+      ],
+      "avoid_visuals": [
+        "hospital emergency",
+        "surgery",
+        "severe illness",
+        "crying baby close up"
+      ]
+    },
+    {
+      "id": "daycare_effect",
+      "narration": "Cuando los niños empiezan la guardería, se exponen a más virus y bacterias, y toda la familia puede enfermarse con más frecuencia.",
+      "captions": [
+        "La guardería puede traer",
+        "más contagios para la familia"
+      ],
+      "visual_keywords": [
+        "children daycare classroom",
+        "kids playing indoors",
+        "parent and child entering daycare"
+      ],
+      "avoid_visuals": [
+        "sick child crying",
+        "medical emergency",
+        "infection animation",
+        "virus close up"
+      ]
+    },
+    {
+      "id": "gi_symptoms",
+      "narration": "Pero meses de dolor de estómago, cólicos y diarrea repetida no deberían explicarse solo como efecto de la guardería.",
+      "captions": [
+        "Pero meses de dolor y diarrea",
+        "no deberían ignorarse"
+      ],
+      "visual_keywords": [
+        "woman holding stomach at home",
+        "adult stomach discomfort",
+        "person sitting on couch unwell"
+      ],
+      "avoid_visuals": [
+        "toilet scene",
+        "graphic diarrhea",
+        "vomiting close up",
+        "blood"
+      ]
+    },
+    {
+      "id": "specialist",
+      "narration": "Tener una cita con gastroenterología es un buen paso, y mientras esperas, llevar un registro de síntomas puede ayudar.",
+      "captions": [
+        "La cita con gastroenterología es un buen paso",
+        "Un registro de síntomas puede ayudar"
+      ],
+      "visual_keywords": [
+        "doctor consultation with adult patient",
+        "woman writing health journal",
+        "person taking notes at desk"
+      ],
+      "avoid_visuals": [
+        "surgery",
+        "emergency room",
+        "medical procedure",
+        "scary hospital"
+      ]
+    },
+    {
+      "id": "symptom_log",
+      "narration": "Anota qué comes, cuándo aparece el dolor o la diarrea, y si notas algún otro síntoma.",
+      "captions": [
+        "Anota qué comes",
+        "cuándo aparecen los síntomas",
+        "y qué más notas"
+      ],
+      "visual_keywords": [
+        "food diary notebook",
+        "health journal writing",
+        "calendar notes on desk"
+      ],
+      "avoid_visuals": [
+        "diet advertisement",
+        "weight loss",
+        "supplement commercial",
+        "extreme food restriction"
+      ]
+    },
+    {
+      "id": "closing",
+      "narration": "Ese registro puede ayudar a tu médico a entender mejor el patrón cuando llegue la consulta.",
+      "captions": [
+        "Ese registro puede ayudar a tu médico",
+        "a entender mejor el patrón"
+      ],
+      "visual_keywords": [
+        "patient talking with doctor",
+        "doctor reviewing notes",
+        "calm medical consultation"
+      ],
+      "avoid_visuals": [
+        "emergency surgery",
+        "panic scene",
+        "ambulance",
+        "severe hospital emergency"
+      ]
+    }
+  ]
+}

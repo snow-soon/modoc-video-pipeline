@@ -1,132 +1,264 @@
-"""Search Pexels assets using human-authored visual keywords."""
+"""Search Pexels assets for the authored block plan."""
 
+from __future__ import annotations
+
+import argparse
 import json
 import os
-from pathlib import Path
-from typing import Optional
+import re
+from typing import Dict, List, Optional
 
 import requests
 from dotenv import load_dotenv
 
+from pipeline_paths import PipelinePaths, build_pipeline_paths
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = BASE_DIR / "output"
-SCRIPT_FILE = OUTPUT_DIR / "script.json"
-ASSETS_FILE = OUTPUT_DIR / "assets.json"
-PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
-REQUEST_TIMEOUT = 30
+load_dotenv()
 
 
-def load_script() -> dict:
-    """Read the parsed script JSON."""
-    if not SCRIPT_FILE.exists():
-        raise FileNotFoundError(f"Missing script file: {SCRIPT_FILE}")
-    return json.loads(SCRIPT_FILE.read_text(encoding="utf-8"))
+DEFAULT_RESULTS_PER_KEYWORD = 5
+MIN_REASONABLE_DURATION = 4
+MAX_REASONABLE_DURATION = 30
 
 
-def is_keyword_blocked(keyword: str, avoid_visuals: list[str]) -> bool:
-    """Skip keywords that violate the block's safety constraints."""
-    lowered_keyword = keyword.casefold()
-    for unsafe in avoid_visuals:
-        unsafe_lower = unsafe.casefold()
-        if unsafe_lower in lowered_keyword or lowered_keyword in unsafe_lower:
-            return True
-    return False
+def load_script(paths: PipelinePaths) -> dict:
+    """Load the normalized script file."""
+    if not paths.script_file.exists():
+        raise FileNotFoundError(f"Missing script file: {paths.script_file}")
+
+    return json.loads(paths.script_file.read_text(encoding="utf-8"))
 
 
-def select_downloadable_video(result: dict) -> Optional[dict]:
-    """Pick the largest downloadable mp4 from one Pexels result."""
-    video_files = result.get("video_files", [])
+def get_search_keywords(block: Dict) -> List[str]:
+    """Return keyword candidates in preferred search order."""
+    seen = set()
+    ordered_keywords = []
+
+    for keyword in block.get("visual_keywords", []):
+        lowered = keyword.lower()
+        if keyword and lowered not in seen:
+            seen.add(lowered)
+            ordered_keywords.append(keyword)
+
+    return ordered_keywords
+
+
+def select_downloadable_mp4(video_files: List[Dict]) -> Optional[Dict]:
+    """Choose the best downloadable MP4 file from a Pexels result."""
     mp4_files = [
         video_file
         for video_file in video_files
         if video_file.get("file_type") == "video/mp4" and video_file.get("link")
     ]
+
     if not mp4_files:
         return None
-    return sorted(mp4_files, key=lambda item: item.get("height") or 0, reverse=True)[0]
+
+    return sorted(
+        mp4_files,
+        key=lambda video_file: video_file.get("height") or 0,
+        reverse=True,
+    )[0]
 
 
-def search_one_keyword(headers: dict, keyword: str) -> Optional[dict]:
-    """Search Pexels for one keyword and return the first usable result."""
+def get_results_per_keyword() -> int:
+    """Return the configured number of Pexels candidates to inspect per keyword."""
+    raw_value = os.getenv("PEXELS_RESULTS_PER_KEYWORD", str(DEFAULT_RESULTS_PER_KEYWORD))
+    try:
+        return max(1, min(int(raw_value), 15))
+    except ValueError:
+        return DEFAULT_RESULTS_PER_KEYWORD
+
+
+def normalize_for_match(text: str) -> str:
+    """Normalize free text for coarse metadata matching."""
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def contains_avoid_term(candidate_text: str, avoid_visuals: List[str]) -> bool:
+    """Return whether candidate metadata contains an avoid hint."""
+    normalized_candidate = normalize_for_match(candidate_text)
+    return any(normalize_for_match(term) in normalized_candidate for term in avoid_visuals if term)
+
+
+def score_candidate(video: Dict, selected_file: Dict, keyword_index: int, avoid_visuals: List[str]) -> int:
+    """Score a Pexels candidate using metadata available before Gemini review."""
+    width = selected_file.get("width") or video.get("width") or 0
+    height = selected_file.get("height") or video.get("height") or 0
+    duration = video.get("duration") or 0
+    score = 0
+
+    if height and width:
+        aspect_ratio = height / max(width, 1)
+        if aspect_ratio >= 1.4:
+            score += 400
+        elif aspect_ratio >= 1.0:
+            score += 200
+        else:
+            score -= 150
+
+    score += min(int(height or 0), 2160) // 4
+    score -= keyword_index * 40
+
+    if MIN_REASONABLE_DURATION <= duration <= MAX_REASONABLE_DURATION:
+        score += 120
+    elif duration > MAX_REASONABLE_DURATION:
+        score -= 60
+
+    candidate_text = " ".join(
+        str(video.get(field, "")) for field in ["url", "image", "id", "duration"]
+    )
+    if contains_avoid_term(candidate_text, avoid_visuals):
+        score -= 1000
+
+    return score
+
+
+def summarize_candidate(video: Dict, selected_file: Dict, keyword: str, score: int) -> Dict:
+    """Keep compact metadata for later Gemini quality review."""
+    return {
+        "video_id": video.get("id"),
+        "keyword": keyword,
+        "score": score,
+        "pexels_page_url": video.get("url"),
+        "preview_image": video.get("image"),
+        "duration": video.get("duration"),
+        "width": selected_file.get("width"),
+        "height": selected_file.get("height"),
+    }
+
+
+def search_videos(keyword: str, headers: dict, per_page: int, portrait_only: bool = True) -> dict:
+    """Search Pexels for a single keyword."""
+    params = {"query": keyword, "per_page": per_page}
+    if portrait_only:
+        params["orientation"] = "portrait"
+
     response = requests.get(
-        PEXELS_SEARCH_URL,
+        "https://api.pexels.com/videos/search",
         headers=headers,
-        params={"query": keyword, "per_page": 5},
-        timeout=REQUEST_TIMEOUT,
+        params=params,
+        timeout=30,
     )
     response.raise_for_status()
-    payload = response.json()
-
-    for video in payload.get("videos", []):
-        selected_file = select_downloadable_video(video)
-        if selected_file:
-            return {
-                "pexels_page_url": video["url"],
-                "download_url": selected_file["link"],
-                "width": selected_file.get("width"),
-                "height": selected_file.get("height"),
-            }
-    return None
+    return response.json()
 
 
-def search_assets() -> Path:
-    """Search one stock asset per block using ordered human-authored keywords."""
-    load_dotenv()
+def search_assets(paths: PipelinePaths) -> List[Dict]:
+    """Search assets using authored block keywords."""
     api_key = os.getenv("PEXELS_API_KEY")
     if not api_key:
         raise EnvironmentError("Missing PEXELS_API_KEY in environment.")
 
-    script = load_script()
+    paths.ensure_directories()
+    data = load_script(paths)
     headers = {"Authorization": api_key}
     results = []
+    per_page = get_results_per_keyword()
 
-    for block in script.get("blocks", []):
-        block_id = block["id"]
-        tried_keywords = []
-        selected_asset = None
+    for block_index, block in enumerate(data.get("blocks", []), start=1):
+        search_keywords = get_search_keywords(block)
+        avoid_visuals = block.get("avoid_visuals", [])
+        candidates = []
 
-        for keyword in block["visual_keywords"]:
-            if is_keyword_blocked(keyword, block.get("avoid_visuals", [])):
+        for keyword_index, keyword in enumerate(search_keywords):
+            result = search_videos(keyword, headers=headers, per_page=per_page)
+            videos = result.get("videos") or []
+
+            if not videos:
+                result = search_videos(
+                    keyword,
+                    headers=headers,
+                    per_page=per_page,
+                    portrait_only=False,
+                )
+                videos = result.get("videos") or []
+
+            if not videos:
                 continue
 
-            tried_keywords.append(keyword)
-            selected_asset = search_one_keyword(headers, keyword)
-            if selected_asset:
-                results.append(
+            for video in videos:
+                selected_file = select_downloadable_mp4(video.get("video_files", []))
+
+                if not selected_file:
+                    continue
+
+                score = score_candidate(
+                    video=video,
+                    selected_file=selected_file,
+                    keyword_index=keyword_index,
+                    avoid_visuals=avoid_visuals,
+                )
+                candidates.append(
                     {
-                        "block_id": block_id,
-                        "selected_keyword": keyword,
-                        "all_keywords": block["visual_keywords"],
-                        "pexels_page_url": selected_asset["pexels_page_url"],
-                        "download_url": selected_asset["download_url"],
-                        "width": selected_asset["width"],
-                        "height": selected_asset["height"],
+                        "video": video,
+                        "selected_file": selected_file,
+                        "keyword": keyword,
+                        "score": score,
                     }
                 )
-                print(f"Block: {block_id}")
-                print(f"Tried keywords: {tried_keywords}")
-                print(f"Selected keyword: {keyword}")
-                print(
-                    "Selected video dimensions: "
-                    f"{selected_asset['width']}x{selected_asset['height']}"
+
+        if not candidates:
+            print(f"No downloadable asset found for block {block['id']}: {search_keywords}")
+            continue
+
+        candidates = sorted(candidates, key=lambda candidate: candidate["score"], reverse=True)
+        selected_candidate = candidates[0]
+        selected_video = selected_candidate["video"]
+        selected_file = selected_candidate["selected_file"]
+        selected_keyword = selected_candidate["keyword"]
+        selected_result = {
+            "block_id": block["id"],
+            "block_index": block_index,
+            "captions": block.get("captions", []),
+            "narration": block.get("narration", ""),
+            "keyword": selected_keyword,
+            "search_keywords": search_keywords,
+            "avoid_visuals": avoid_visuals,
+            "pexels_video_id": selected_video.get("id"),
+            "pexels_page_url": selected_video.get("url"),
+            "preview_image": selected_video.get("image"),
+            "duration": selected_video.get("duration"),
+            "download_url": selected_file.get("link"),
+            "width": selected_file.get("width"),
+            "height": selected_file.get("height"),
+            "selection_score": selected_candidate["score"],
+            "candidates_considered": len(candidates),
+            "candidate_summary": [
+                summarize_candidate(
+                    video=candidate["video"],
+                    selected_file=candidate["selected_file"],
+                    keyword=candidate["keyword"],
+                    score=candidate["score"],
                 )
-                break
+                for candidate in candidates[:5]
+            ],
+            "gemini_review_status": "pending",
+        }
 
-        if selected_asset is None:
-            print(f"Block: {block_id}")
-            print(f"Tried keywords: {tried_keywords}")
-            print("Selected keyword: none")
-            print("Selected video dimensions: none")
+        print(
+            f"Block {block['id']}: selected keyword '{selected_keyword}' "
+            f"from {len(candidates)} candidates"
+        )
+        results.append(selected_result)
 
-    ASSETS_FILE.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Created {ASSETS_FILE}")
-    return ASSETS_FILE
+    paths.assets_file.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Created {paths.assets_file}")
+    return results
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(description="Search stock assets for one pipeline run.")
+    parser.add_argument("--input", required=True, help="Path to the authored script_plan.json file.")
+    parser.add_argument("--output", required=True, help="Path to the output directory for this run.")
+    return parser.parse_args()
 
 
 def main() -> None:
-    """Search assets for all blocks."""
-    search_assets()
+    """Search and save stock assets."""
+    args = parse_args()
+    search_assets(build_pipeline_paths(args.input, args.output))
 
 
 if __name__ == "__main__":

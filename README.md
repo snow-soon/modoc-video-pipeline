@@ -1,173 +1,345 @@
 # Modoc Video Pipeline
 
-Human-script-first semi-automated short-form video pipeline for Korean medical content.
+Semi-automated short-form video generation pipeline for human-authored, multi-language medical video scripts.
 
 ## Overview
 
-This pipeline treats the human-written script as the source of truth.
+This project converts human-authored script plans into short-form vertical videos using Text-to-Speech (TTS), stock media retrieval, and automated video rendering.
 
-The script is finalized by a human first. After that, the pipeline automates:
+The script plan JSON is the source of truth. The pipeline does not translate or rewrite narration. It only normalizes the authored plan, generates TTS, times captions, searches/downloads assets, and renders the final video.
 
-1. script parsing and validation
-2. exact narration assembly
-3. Gemini TTS generation
-4. caption timing from authored caption blocks
-5. Pexels asset search
-6. stock video download
-7. MoviePy rendering
+---
 
-This keeps medical wording under human control while still automating the repetitive production steps.
-
-## Why This Direction
-
-The previous version gave too much control to AI script generation. That caused:
-
-- inconsistent script quality
-- weak visual matching
-- awkward caption splitting
-- poor subtitle sync
-- stale outputs across runs
-- scene timing unrelated to narration meaning
-
-The current pipeline improves medical accuracy, visual relevance, and caption quality by making the script plan human-authored.
-
-## Input
-
-Edit the script plan before running:
-
-`input/script_plan.example.json`
-
-Example shape:
-
-```json
-{
-  "title": "아이 목 뒤가 갑자기 부었을 때 확인할 점",
-  "language": "ko",
-  "global_avoid_visuals": [
-    "thermometer",
-    "red thermometer",
-    "37 degree thermometer",
-    "fever threshold",
-    "clinical lymph node diagram",
-    "surgery",
-    "severe hospital emergency scene"
-  ],
-  "blocks": [
-    {
-      "id": "hook",
-      "narration": "아이 목 뒤가 갑자기 부었다면 많이 걱정되실 수 있어요.",
-      "captions": [
-        "아이 목 뒤가 갑자기 부었다면",
-        "많이 걱정되실 수 있어요"
-      ],
-      "visual_keywords": [
-        "parent checking child neck",
-        "child neck discomfort",
-        "parent caring for child"
-      ],
-      "avoid_visuals": [
-        "red thermometer",
-        "37 degree fever thermometer",
-        "clinical lymph node diagram"
-      ]
-    }
-  ]
-}
-```
-
-## Pipeline
+## Current Pipeline
 
 ```text
-Human script plan JSON
+Human-authored script_plan.json
     ↓
-generate_script.py
+Script Normalization
     ↓
+Gemini Medical Script Review
+    ↓
+Gemini TTS Generation
+    ↓
+Caption + Timing Plan Generation
+    ↓
+Pexels Asset Candidate Retrieval
+    ↓
+Stock Video Download
+    ↓
+Gemini Visual Match Review
+    ↓
+MoviePy Rendering
+    ↓
+final_video.mp4
+```
+
+---
+
+## Features
+
+### 1. Authored Script Plan Normalization
+
+Input script plans are validated and copied into runtime files:
+
+* Video title
+* Language
+* Full narration
+* Block structure
+* Authored captions
+* Authored visual keywords
+* Authored avoid-visual lists
+
+Generated outputs:
+
+```text
 output/script.json
 output/narration.txt
-    ↓
-generate_tts.py
-    ↓
+```
+
+---
+
+### 2. Gemini Quality Review
+
+Gemini is used as a review gate, not as the script author. It checks:
+
+* Medical safety and unsupported claims
+* Language corruption or broken characters
+* Whether visual keywords imply stronger medical claims than the narration
+* Whether selected/downloaded stock videos match each narration block
+
+Generated output:
+
+```text
+output/quality_review.json
+```
+
+By default, the main pipeline stops before rendering if Gemini blocks the script or gives a selected video a low match/safety score.
+
+---
+
+### 3. Gemini TTS Integration
+
+Uses Gemini TTS models to generate narration audio from the exact authored narration text.
+
+Generated output:
+
+```text
 output/narration.wav
-    ↓
-generate_captions.py
-    ↓
+```
+
+---
+
+### 4. Automatic Subtitle Generation
+
+Creates subtitle files and block timing plans directly from authored captions and measured narration duration.
+
+Generated output:
+
+```text
 output/captions.srt
 output/timing_plan.json
-    ↓
-search_assets.py
-    ↓
+```
+
+Goals:
+
+* Human-written narration remains unchanged
+* TTS and subtitles use authored source text
+* Block-based timing distribution
+* Caption-safe layout
+
+---
+
+### 5. Stock Media Retrieval
+
+Uses the Pexels API to:
+
+* Search multiple stock-video candidates with authored keywords
+* Prefer vertical, higher-resolution, reasonably short videos
+* Keep each run isolated by output directory
+* Save block-keyed asset metadata
+
+Generated output:
+
+```text
 output/assets.json
-    ↓
-download_assets.py
-    ↓
-assets/{block_id}.mp4
-    ↓
-render_video.py
-    ↓
+```
+
+---
+
+### 6. Asset Download Pipeline
+
+Downloads selected stock footage locally per language run.
+
+Generated output:
+
+```text
+output/<topic>/<lang>/assets/block_1.mp4
+output/<topic>/<lang>/assets/block_2.mp4
+...
+```
+
+---
+
+### 7. Automated Video Rendering
+
+Uses MoviePy to combine:
+
+* Stock footage
+* Narration audio
+* Captions
+
+into a vertical short-form video.
+
+Generated output:
+
+```text
 output/final_video.mp4
 ```
 
-## Files
+---
+
+## Tech Stack
+
+### AI / LLM
+
+* Gemini quality review
+* Gemini TTS
+
+### Media
+
+* Pexels API
+* MoviePy
+* FFmpeg
+
+### Language
+
+* Python
+
+---
+
+## Project Structure
 
 ```text
 modoc-video-pipeline/
+
 ├── input/
-│   ├── medical_qna.example.txt
-│   └── script_plan.example.json
+│   ├── daycare_parent_gi/
+│   │   ├── script_plan.ko.json
+│   │   ├── script_plan.en.json
+│   │   └── script_plan.es.json
+│   └── infant_nasal_regurgitation/
+│       ├── script_plan.ko.json
+│       ├── script_plan.en.json
+│       └── script_plan.es.json
+│
 ├── output/
-│   ├── script.json
-│   ├── narration.txt
-│   ├── narration.wav
-│   ├── captions.srt
-│   ├── timing_plan.json
-│   ├── assets.json
-│   └── final_video.mp4
-├── assets/
-│   └── {block_id}.mp4
+│   └── infant_nasal_regurgitation/
+│       ├── ko/
+│       │   ├── script.json
+│       │   ├── narration.txt
+│       │   ├── narration.wav
+│       │   ├── captions.srt
+│       │   ├── timing_plan.json
+│       │   ├── assets.json
+│       │   ├── quality_review.json
+│       │   ├── final_video.mp4
+│       │   └── assets/
+│       ├── en/
+│       └── es/
+│
+├── scripts/
+│   └── run_all_languages.sh
+│
 ├── src/
 │   ├── generate_script.py
 │   ├── generate_tts.py
 │   ├── generate_captions.py
 │   ├── search_assets.py
 │   ├── download_assets.py
+│   ├── validate_visuals.py
 │   ├── render_video.py
-│   └── main.py
+│   └── pipeline_paths.py
+│
 └── README.md
 ```
 
-## Environment Variables
+---
 
-Create `.env` from `.env.example` and set:
+## Current Status
 
-- `GEMINI_API_KEY`
-- `PEXELS_API_KEY`
+### Implemented
 
-## Install
+* Authored script-plan normalization
+* Gemini medical script quality review
+* Gemini TTS integration
+* Caption and timing-plan generation
+* Pexels multi-candidate asset search
+* Stock footage download
+* Gemini visual match review
+* Automated video rendering
+* Wide, word-safe caption rendering
+* Language-specific output isolation
+
+### In Progress
+
+* Human review workflow
+
+---
+
+## Future Improvements
+
+* Word-level subtitle synchronization
+* Asset ranking and filtering
+* Caption animations
+* Production-grade rendering pipeline
+
+## CLI Usage
+
+Run one language:
 
 ```bash
-pip install -r requirements.txt
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.ko.json --output output/infant_nasal_regurgitation/ko
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.en.json --output output/infant_nasal_regurgitation/en
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.es.json --output output/infant_nasal_regurgitation/es
 ```
 
-MoviePy also requires a working FFmpeg installation on the machine.
-
-## Run
-
-Manual step:
-
-1. Edit `input/script_plan.example.json`
-
-Run command:
+Run all three:
 
 ```bash
-python3 src/main.py
+./scripts/run_all_languages.sh infant_nasal_regurgitation
 ```
 
-## Outputs
+Quality review controls:
 
-- `output/script.json`: validated structured script
-- `output/narration.txt`: exact text used for TTS
-- `output/narration.wav`: Gemini TTS output
-- `output/captions.srt`: authored captions with proportional timing
-- `output/timing_plan.json`: block-level and caption-level timing data
-- `output/assets.json`: selected Pexels assets per block
-- `output/final_video.mp4`: rendered final video
+```bash
+# Default: run Gemini medical review and upload downloaded videos for Gemini visual review.
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.es.json --output output/infant_nasal_regurgitation/es
+
+# Faster/cheaper visual review: use selected asset metadata only.
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.es.json --output output/infant_nasal_regurgitation/es --review-video-mode metadata
+
+# Debug rendering without Gemini quality gates.
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.es.json --output output/infant_nasal_regurgitation/es --skip-quality-review
+
+# Run review after assets already exist.
+python3 src/validate_visuals.py --input input/infant_nasal_regurgitation/script_plan.es.json --output output/infant_nasal_regurgitation/es --stage all
+```
+
+## Multi-language Example
+
+Each language has its own authored script plan, and outputs are isolated by language under the chosen output directory. Gemini does not translate or rewrite scripts in this flow. The human-written script plan remains the source of truth for Korean, English, and Spanish.
+
+```bash
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.ko.json --output output/infant_nasal_regurgitation/ko
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.en.json --output output/infant_nasal_regurgitation/en
+python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.es.json --output output/infant_nasal_regurgitation/es
+```
+
+```bash
+chmod +x scripts/run_all_languages.sh
+./scripts/run_all_languages.sh infant_nasal_regurgitation
+```
+
+## Script Plan Contract
+
+Each `script_plan.json` should include:
+
+```json
+{
+  "title": "Neck swelling",
+  "language": "Korean",
+  "narration": "Optional full narration string",
+  "avoid_visuals": ["thermometer close-up"],
+  "blocks": [
+    {
+      "id": "block_1",
+      "narration": "Human-written block narration",
+      "captions": ["Authored caption 1", "Authored caption 2"],
+      "visual_keywords": ["parent checking child neck", "pediatric consultation"],
+      "avoid_visuals": ["graphic medical illustration"]
+    }
+  ]
+}
+```
+
+## Environment
+
+Required:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+PEXELS_API_KEY=your_pexels_api_key_here
+```
+
+Optional quality/rendering controls:
+
+```bash
+GEMINI_REVIEW_MODEL=gemini-2.5-flash
+GEMINI_QUALITY_REVIEW_MODE=video
+GEMINI_QUALITY_MIN_SCORE=4
+PEXELS_RESULTS_PER_KEYWORD=5
+GEMINI_TTS_VOICE_ES=Kore
+```
+
+`GEMINI_QUALITY_REVIEW_MODE=video` uploads the downloaded local MP4 assets to Gemini for visual review. Use `metadata` when you only want a cheaper metadata-level gate.
