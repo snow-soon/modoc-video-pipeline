@@ -163,7 +163,7 @@ def rank_candidates_with_gemini(
     """Use candidate preview images to reject obvious semantic mismatches before download."""
     from google.genai import types
 
-    from validate_visuals import gemini_json, get_gemini_client, get_review_model
+    from validate_visuals import coerce_score, gemini_json, get_gemini_client, get_review_model
 
     preview_candidates = candidates[:GEMINI_PREVIEW_CANDIDATE_LIMIT]
     candidate_metadata = []
@@ -201,7 +201,7 @@ def rank_candidates_with_gemini(
         "image is the preview for the labeled candidate immediately before it. Select the candidate whose visible "
         "subject, approximate age, action, setting, and emotional tone most literally match the narration. Reject "
         "adult subjects, older children, distress, procedures, or unrelated actions. A preview cannot prove the "
-        "whole clip matches, so this is only a preliminary screen; still choose the strongest plausible candidate. "
+        "whole clip matches, so this is only a preliminary screen. Return selected_video_id null if none is a close match. "
         "Return only JSON:\n"
         "{\n"
         '  "selected_video_id": 123,\n'
@@ -211,16 +211,20 @@ def rank_candidates_with_gemini(
         '  "limitations": "preview image only"\n'
         "}\n"
         "Use confidence 5 for a clear literal preview match, 4 for a close match, 3 for generic but plausible, "
-        "and 1-2 when all candidates are weak. selected_video_id must be one of the supplied candidates.\n\n"
+        "and 1-2 when all candidates are weak. Only select a supplied candidate with confidence 4 or 5.\n\n"
         f"BLOCK:\n{json.dumps({'id': block.get('id'), 'narration': block.get('narration'), 'captions': block.get('captions'), 'visual_keywords': block.get('visual_keywords'), 'avoid_visuals': block.get('avoid_visuals')}, ensure_ascii=False, indent=2)}\n\n"
         f"CANDIDATE_METADATA:\n{json.dumps(candidate_metadata, ensure_ascii=False, indent=2)}"
     )
-    review = gemini_json(
-        get_gemini_client(),
-        get_review_model(model),
-        [prompt, *contents],
-    )
+    client = get_gemini_client()
+    try:
+        review = gemini_json(client, get_review_model(model), [prompt, *contents])
+    finally:
+        client.close()
     selected_video_id = str(review.get("selected_video_id"))
+    supplied_ids = {str(item["video_id"]) for item in candidate_metadata}
+    rejected_ids = {str(item) for item in review.get("rejected_video_ids", [])}
+    if coerce_score(review.get("confidence")) < 4 or selected_video_id not in supplied_ids or selected_video_id in rejected_ids:
+        return None, review
     selected_candidate = next(
         (
             candidate
@@ -280,6 +284,10 @@ def search_assets(
         for result in existing_results
         if result.get("block_id", "") not in target_block_ids
     }
+    def save_progress():
+        from pipeline_state import atomic_json
+        atomic_json(paths.assets_file, [result_map[b["id"]] for b in data["blocks"] if b["id"] in result_map])
+
     per_page = get_results_per_keyword()
 
     for block_index, block in enumerate(data.get("blocks", []), start=1):
@@ -335,7 +343,10 @@ def search_assets(
             result_map.pop(block_id, None)
             continue
 
-        candidates = sorted(candidates, key=lambda candidate: candidate["score"], reverse=True)
+        unique = {}
+        for candidate in sorted(candidates, key=lambda candidate: candidate["score"], reverse=True):
+            unique.setdefault(str(candidate["video"]["id"]), candidate)
+        candidates = list(unique.values())
         preview_review = None
         selected_candidate = None
         if use_gemini_ranking:
@@ -345,6 +356,11 @@ def search_assets(
                 candidates,
                 model=review_model,
             )
+            if selected_candidate is None:
+                from pipeline_state import atomic_json
+                atomic_json(paths.output_dir / f"preview_rejection_{block_id}.json", preview_review or {"reason": "no_loadable_previews"})
+                save_progress()
+                raise RuntimeError(f"No acceptable visual preview for {block_id}. Refine keywords; unsafe fallback is disabled.")
         selected_candidate = selected_candidate or candidates[0]
         selected_video = selected_candidate["video"]
         selected_file = selected_candidate["selected_file"]
@@ -402,6 +418,7 @@ def search_assets(
             f"from {len(candidates)} candidates"
         )
         result_map[block_id] = selected_result
+        save_progress()
 
     results = [
         result_map[block.get("id", "")]

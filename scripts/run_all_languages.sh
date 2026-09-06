@@ -29,10 +29,15 @@ VERIFIED_DIR="output/${TOPIC}/verified_input"
   --output "output/${TOPIC}/es" \
   --reuse-assets-from "output/${TOPIC}/ko"
 
+"${PYTHON_BIN}" src/prepare_multilingual.py \
+  --output-dir "output/${TOPIC}" \
+  --verify-rendered
+
 "${PYTHON_BIN}" scripts/review_final_video_medical.py \
   --output-dir "output/${TOPIC}/ko" \
   --output-dir "output/${TOPIC}/en" \
   --output-dir "output/${TOPIC}/es" \
   --report "output/${TOPIC}/medical_video_review.txt" \
   --json-report "output/${TOPIC}/medical_video_review.json" \
-  --visual-input video
+  --visual-input video \
+  --resume

@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -15,12 +17,15 @@ from generate_script import generate_script
 from generate_tts import generate_tts
 from optimize_assets import optimize_assets
 from pipeline_paths import build_pipeline_paths
+from pipeline_state import StageCache, file_digest
 from search_assets import search_assets
 from validate_visuals import (
     get_min_visual_score,
     review_script_quality,
     review_visual_quality,
     visual_review_failed,
+    script_review_current,
+    get_review_model,
 )
 
 
@@ -112,13 +117,9 @@ def synchronize_asset_metadata(paths) -> None:
     )
 
 
-def script_review_passed(paths) -> bool:
+def script_review_passed(paths, model: Optional[str] = None) -> bool:
     """Return whether a prior script quality gate completed successfully."""
-    if not paths.quality_review_file.exists():
-        return False
-    report = json.loads(paths.quality_review_file.read_text(encoding="utf-8"))
-    summary = report.get("summary") or {}
-    return bool(report.get("script_review")) and bool(summary.get("script_passed"))
+    return script_review_current(paths, model)
 
 
 def canonical_assets_exist(paths) -> bool:
@@ -131,6 +132,21 @@ def canonical_assets_exist(paths) -> bool:
         for block in script.get("blocks", [])
         if block.get("id")
     )
+
+
+def review_rendered_output(paths, model: Optional[str], allow_failures: bool = False) -> None:
+    """Single-language runs must also review the actual rendered audio and pixels."""
+    command = [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "review_final_video_medical.py"),
+               "--output-dir", str(paths.output_dir), "--visual-input", "video", "--resume",
+               "--report", str(paths.output_dir / "medical_video_review.txt"),
+               "--json-report", str(paths.output_dir / "medical_video_review.json")]
+    if model:
+        command.extend(["--model", model])
+    if allow_failures:
+        command.append("--allow-failures")
+    subprocess.run(command, check=True)
+
+
 def repair_failed_visuals(
     paths,
     reviews: List[dict],
@@ -193,6 +209,7 @@ def repair_failed_visuals(
             review_model=model,
         )
         download_assets(paths, block_ids=failed_ids)
+        optimize_assets(paths)
         reviews = review_visual_quality(
             paths,
             model=model,
@@ -259,21 +276,29 @@ def main() -> None:
     """Generate one full language-specific video output in sequence."""
     args = parse_args()
     paths = build_pipeline_paths(args.input, args.output)
+    cache = StageCache(paths.output_dir)
+    script_inputs = {"authored": file_digest(paths.input_file),
+                     "normalizer": file_digest(Path(__file__).with_name("generate_script.py")),
+                     "review_policy": file_digest(Path(__file__).with_name("validate_visuals.py")),
+                     "source_policy": file_digest(Path(__file__).with_name("medical_evidence.py")),
+                     "review_model": None if args.skip_quality_review else get_review_model(args.review_model)}
+    script_outputs = [paths.script_file, paths.narration_text_file]
     quality_review_enabled = not args.skip_quality_review
-    total_steps = 8 if quality_review_enabled else 6
+    total_steps = 9 if quality_review_enabled else 6
     fail_on_quality = not args.allow_quality_failures
     step = 1
 
     print(f"[{step}/{total_steps}] Normalize script plan: {paths.input_file}")
-    if args.resume and paths.script_file.exists() and paths.narration_text_file.exists():
+    if args.resume and cache.matches("script", script_inputs, script_outputs):
         print("Resume: existing normalized script is complete")
     else:
         generate_script(paths)
+        cache.record("script", script_inputs, script_outputs)
     step += 1
 
     if quality_review_enabled:
         print(f"[{step}/{total_steps}] Gemini medical script review")
-        if args.resume and script_review_passed(paths):
+        if args.resume and script_review_passed(paths, args.review_model):
             print("Resume: existing Gemini script review passed")
         else:
             review_script_quality(
@@ -283,20 +308,15 @@ def main() -> None:
                 auto_revise=True,
                 max_revisions=args.max_script_revisions,
             )
+        cache.record("script", script_inputs, script_outputs)
         step += 1
 
     print(f"[{step}/{total_steps}] Generate TTS audio")
-    if args.resume and paths.audio_file.exists():
-        print("Resume: existing narration audio is complete")
-    else:
-        generate_tts(paths)
+    generate_tts(paths, resume=args.resume)
     step += 1
 
     print(f"[{step}/{total_steps}] Generate captions and timing plan")
-    if args.resume and paths.captions_file.exists() and paths.timing_plan_file.exists():
-        print("Resume: existing captions and timing plan are complete")
-    else:
-        generate_captions(paths)
+    generate_captions(paths)
     step += 1
 
     if args.reuse_assets_from:
@@ -309,17 +329,22 @@ def main() -> None:
         step += 2
     else:
         print(f"[{step}/{total_steps}] Search stock assets")
-        search_assets(
-            paths,
-            use_gemini_ranking=quality_review_enabled,
-            review_model=args.review_model,
-        )
+        if args.resume and canonical_assets_exist(paths):
+            synchronize_asset_metadata(paths)
+            print("Resume: selected assets retained; current script and video bytes will be revalidated")
+        else:
+            search_assets(
+                paths,
+                use_gemini_ranking=quality_review_enabled,
+                review_model=args.review_model,
+            )
         step += 1
 
         print(f"[{step}/{total_steps}] Download stock assets")
         download_assets(paths)
         step += 1
 
+    optimize_assets(paths)
     if quality_review_enabled:
         print(f"[{step}/{total_steps}] Gemini visual match review")
         resolved_min_score = get_min_visual_score(args.review_min_score)
@@ -350,32 +375,11 @@ def main() -> None:
         step += 1
 
     print(f"[{step}/{total_steps}] Render final video")
-    optimize_assets(paths)
-    from render_video import render_video as render_video_impl
-    from render_video import load_captions, load_script, load_timing_plan
-
-    try:
-        from moviepy import AudioFileClip
-    except ImportError:
-        from moviepy.editor import AudioFileClip  # type: ignore
-
-    script = load_script(paths)
-    timing_plan = load_timing_plan(paths)
-    captions = load_captions(paths)
-    audio_clip = AudioFileClip(str(paths.audio_file))
-    final_video = render_video_impl(paths, script, timing_plan, audio_clip, captions)
-    final_video.write_videofile(
-        str(paths.final_video_file),
-        fps=30,
-        codec="libx264",
-        audio_codec="aac",
-        preset="veryfast",
-        threads=max(1, os.cpu_count() or 4),
-        ffmpeg_params=["-movflags", "+faststart"],
-    )
-    final_video.close()
-    audio_clip.close()
-    print(f"Created {paths.final_video_file}")
+    from render_ffmpeg import render_final_video
+    render_final_video(paths, resume=args.resume)
+    if quality_review_enabled:
+        print(f"[{total_steps}/{total_steps}] Gemini final rendered video and audio review")
+        review_rendered_output(paths, args.review_model, args.allow_quality_failures)
 
 
 if __name__ == "__main__":

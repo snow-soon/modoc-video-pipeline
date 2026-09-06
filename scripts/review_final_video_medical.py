@@ -26,7 +26,19 @@ from validate_visuals import (  # noqa: E402
     get_review_model,
     upload_video_for_review,
     wait_for_uploaded_file,
+    coerce_score,
+    unsafe_findings,
+    script_review_current,
 )
+from medical_evidence import collect_medical_evidence  # noqa: E402
+from pipeline_state import atomic_json, file_digest, fingerprint  # noqa: E402
+from pipeline_paths import build_pipeline_paths  # noqa: E402
+from generate_captions import get_audio_duration, validate_timing_plan  # noqa: E402
+from render_video import (  # noqa: E402
+    load_captions, caption_tokens_preserved, CAPTION_BOTTOM_MARGIN, CAPTION_SIDE_MARGIN,
+    CAPTION_MAX_LINES, CAPTION_VERTICAL_PADDING_BOTTOM, VIDEO_HEIGHT, VIDEO_WIDTH,
+)
+from render_ffmpeg import validate_render  # noqa: E402
 
 
 DEFAULT_OUTPUTS = [
@@ -202,6 +214,7 @@ def build_review_prompt(
     contact_sheet_path: Optional[Path] = None,
     caption_contact_sheet_path: Optional[Path] = None,
     caption_layout: Optional[Dict[str, Any]] = None,
+    medical_evidence: Optional[Dict[str, Any]] = None,
 ) -> str:
     review_topic = get_review_topic(script, video_path)
     payload = {
@@ -212,6 +225,7 @@ def build_review_prompt(
             str(caption_contact_sheet_path) if caption_contact_sheet_path else None
         ),
         "caption_layout": caption_layout or {},
+        "retrieved_references": medical_evidence or {},
         "script": compact_script(script),
         "captions_srt": captions,
         "review_context": {
@@ -224,6 +238,8 @@ def build_review_prompt(
         "You are a conservative clinical safety reviewer for a legitimate, non-sexual pediatric health-education "
         "video about routine infant development, feeding observation, and caregiver safety.\n"
         "Review the uploaded visual evidence together with the authored transcript and captions.\n"
+        "Use retrieved article text for medical evidence; authored source notes are incomplete summaries. "
+        "A missing source note does not justify deleting a warning. Source gaps require clinician review. "
         "Do not rewrite, translate, or localize the script. The authored script is the source of truth.\n"
         "Evaluate whether the final video is medically/developmentally safe to publish for a general audience.\n"
         "You must inspect the uploaded visual evidence. Do not approve the visual checks from keywords alone. "
@@ -238,6 +254,9 @@ def build_review_prompt(
         "Focus on: unsupported medical or developmental claims, overdiagnosis, missing caution, dangerous advice, "
         "language corruption, caption/audio mismatch, and visuals that imply a stronger or different medical claim "
         "than the narration.\n"
+        "Listen to the actual audio in the uploaded video, not just the supplied transcript. Check for omitted, "
+        "repeated, invented, mispronounced, or wrong-language speech and caption changes occurring during the wrong "
+        "spoken sentence. These checks must be false for frame-only input, which cannot pass publication review.\n"
         f"Be strict but practical. The topic is {review_topic}. Flag advice or visuals that overstate certainty, "
         "discourage professional care, or imply diagnosis/treatment beyond the script.\n"
         "Return only JSON with this exact shape:\n"
@@ -264,7 +283,10 @@ def build_review_prompt(
         '    "caption_glyphs_not_clipped": false,\n'
         '    "caption_words_not_split": false,\n'
         '    "caption_safe_area_respected": false,\n'
-        '    "visuals_do_not_mislead": false\n'
+        '    "visuals_do_not_mislead": false,\n'
+        '    "spoken_audio_matches_script": false,\n'
+        '    "audio_language_correct": false,\n'
+        '    "caption_timing_matches_speech": false\n'
         "  },\n"
         '  "findings": [\n'
         "    {\n"
@@ -285,7 +307,46 @@ def build_review_prompt(
     )
 
 
-def review_output_dir(output_dir: Path, model: str, visual_input: str) -> Dict[str, Any]:
+def final_evidence_fingerprint(output_dir: Path, model: str, visual_input: str) -> str:
+    files = ("final_video.mp4", "script.json", "captions.srt", "caption_layout.json", "timing_plan.json",
+             "narration.wav", "audio_segments.json", "render_verification.json", "medical_evidence.json", "quality_review.json")
+    return fingerprint({"files": {name: file_digest(output_dir / name) if (output_dir / name).is_file() else None for name in files},
+                        "model": model, "mode": visual_input, "policy": file_digest(Path(__file__)),
+                        "gate_policy": file_digest(SRC_DIR / "validate_visuals.py")})
+
+
+def deterministic_video_checks(output_dir: Path) -> Dict[str, Any]:
+    paths = build_pipeline_paths(output_dir / "script.json", output_dir)
+    script, plan = load_json(paths.script_file), load_json(paths.timing_plan_file)
+    duration = get_audio_duration(paths)
+    captions = load_captions(paths)
+    validate_timing_plan(script, plan, captions, duration)
+    if plan.get("audio_sha256") != file_digest(paths.audio_file) or plan.get("scene_timing_basis") != "measured_speech_segments":
+        raise ValueError("Missing or stale measured audio timing.")
+    layout = load_json(paths.caption_layout_file)
+    if layout.get("passed") is not True or len(layout.get("captions", [])) != len(captions):
+        raise ValueError("Caption layout gate failed or is incomplete.")
+    for caption, entry in zip(captions, layout["captions"]):
+        if caption["text"] != entry.get("text") or any(abs(caption[key] - entry[key]) > .002 for key in ("start", "end")):
+            raise ValueError("Caption layout evidence is stale.")
+        left, top, right, bottom = entry["screen_bbox"]
+        if (entry.get("word_tokens_preserved") is not True
+                or not caption_tokens_preserved(caption["text"], entry["wrapped_text"])
+                or not 1 <= entry["line_count"] <= CAPTION_MAX_LINES
+                or not CAPTION_SIDE_MARGIN <= left < right <= VIDEO_WIDTH - CAPTION_SIDE_MARGIN
+                or not 0 <= top < bottom <= VIDEO_HEIGHT - CAPTION_BOTTOM_MARGIN
+                or entry["padding"]["bottom"] < CAPTION_VERTICAL_PADDING_BOTTOM - 2):
+            raise ValueError("Caption safe area or glyph geometry is invalid.")
+    proof = load_json(output_dir / "render_verification.json")
+    if proof.get("video_sha256") != file_digest(paths.final_video_file):
+        raise ValueError("Rendered video changed after deterministic verification.")
+    if (proof.get("caption_layout_sha256") != file_digest(paths.caption_layout_file)
+            or proof.get("timing_plan_sha256") != file_digest(paths.timing_plan_file)):
+        raise ValueError("Caption or timing evidence changed after rendering.")
+    return validate_render(paths.final_video_file, duration)
+
+
+def review_output_dir(output_dir: Path, model: str, visual_input: str, allow_incomplete_evidence: bool = False) -> Dict[str, Any]:
     video_path = output_dir / "final_video.mp4"
     script_path = output_dir / "script.json"
     captions_path = output_dir / "captions.srt"
@@ -293,9 +354,26 @@ def review_output_dir(output_dir: Path, model: str, visual_input: str) -> Dict[s
 
     if not video_path.exists():
         raise FileNotFoundError(f"Missing final video: {video_path}")
+    try:
+        deterministic = deterministic_video_checks(output_dir)
+    except (ValueError, KeyError, FileNotFoundError) as error:
+        if not allow_incomplete_evidence:
+            raise
+        deterministic = {"passed": False, "limitation": str(error)}
 
-    client = get_gemini_client()
     script = load_json(script_path)
+    try:
+        medical_evidence = collect_medical_evidence(script, output_dir)
+        upstream_approved = script_review_current(build_pipeline_paths(script_path, output_dir), model)
+    except RuntimeError as error:
+        if not allow_incomplete_evidence:
+            raise
+        medical_evidence = {"retrieved_count": 0, "limitation": str(error)}
+        upstream_approved = False
+    if not upstream_approved and not allow_incomplete_evidence:
+        raise RuntimeError("Script approval is stale or blocked. Re-run the medical/source review before final verification.")
+    client = get_gemini_client()
+    evidence = final_evidence_fingerprint(output_dir, model, visual_input)
     captions = load_text(captions_path)
     caption_layout = load_json(caption_layout_path) if caption_layout_path.exists() else {}
     caption_contact_sheet_path = extract_caption_contact_sheet(
@@ -314,10 +392,8 @@ def review_output_dir(output_dir: Path, model: str, visual_input: str) -> Dict[s
         uploaded_visual = upload_image_for_review(client, contact_sheet_path)
         visual_basis = "sampled_frames_contact_sheet"
 
-    review = gemini_json(
-        client,
-        model,
-        [
+    try:
+        review = gemini_json(client, model, [
             uploaded_visual,
             uploaded_caption_sheet,
             build_review_prompt(
@@ -328,9 +404,18 @@ def review_output_dir(output_dir: Path, model: str, visual_input: str) -> Dict[s
                 contact_sheet_path,
                 caption_contact_sheet_path,
                 caption_layout,
+                medical_evidence,
             ),
-        ],
-    )
+        ])
+    finally:
+        for uploaded in (uploaded_visual, uploaded_caption_sheet):
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                print("Warning: Gemini temporary upload cleanup failed")
+        client.close()
+    if evidence != final_evidence_fingerprint(output_dir, model, visual_input):
+        raise ValueError("Review inputs changed during final verification.")
     review["output_dir"] = str(output_dir)
     review["video_file"] = str(video_path)
     review["contact_sheet_file"] = str(contact_sheet_path) if contact_sheet_path else None
@@ -341,11 +426,11 @@ def review_output_dir(output_dir: Path, model: str, visual_input: str) -> Dict[s
     review["captions_file"] = str(captions_path)
     review["model"] = model
     review["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+    review["deterministic_checks"] = deterministic
+    review["upstream_script_approved"] = upstream_approved
+    review["evidence_fingerprint"] = evidence
     review["pipeline_gate_passed"] = final_review_passed(review)
-    (output_dir / "final_quality_review.json").write_text(
-        json.dumps(review, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_json(output_dir / "final_quality_review.json", review)
     return review
 
 
@@ -354,12 +439,16 @@ def final_review_passed(review: Dict[str, Any]) -> bool:
     checks = review.get("checks") or {}
     required_checks = (
         "medical_claims_safe",
+        "professional_help_caution_present",
         "not_diagnostic_or_prescriptive",
         "captions_readable_and_not_corrupted",
         "caption_glyphs_not_clipped",
         "caption_words_not_split",
         "caption_safe_area_respected",
         "visuals_do_not_mislead",
+        "spoken_audio_matches_script",
+        "audio_language_correct",
+        "caption_timing_matches_speech",
     )
     scores = (
         review.get("medical_safety_score"),
@@ -370,9 +459,13 @@ def final_review_passed(review: Dict[str, Any]) -> bool:
     )
     return (
         review.get("publish_status") == "approved"
-        and review.get("must_not_publish") is not True
+        and review.get("must_not_publish") is False
         and review.get("actual_video_reviewed") is True
-        and all(isinstance(score, (int, float)) and score >= 4 for score in scores)
+        and review.get("visual_review_basis") == "uploaded_final_video"
+        and (review.get("deterministic_checks") or {}).get("passed") is True
+        and review.get("upstream_script_approved") is True
+        and not unsafe_findings(review.get("findings"))
+        and all(coerce_score(score) >= 4 for score in scores)
         and all(checks.get(check) is True for check in required_checks)
     )
 
@@ -385,6 +478,7 @@ def render_text_report(reviews: List[Dict[str, Any]]) -> str:
         "",
         "Scope: final rendered MP4 review using Gemini visual evidence, script.json, and captions.srt.",
         "This is an automated publication-safety screen, not a clinician sign-off.",
+        "Model scores are subjective ratings, not measured clinical error rates. The pipeline decision overrides raw model approval.",
         "",
     ]
 
@@ -393,13 +487,17 @@ def render_text_report(reviews: List[Dict[str, Any]]) -> str:
             [
                 f"## {review.get('language', 'unknown').upper()}",
                 "",
+                f"- Publication decision: {'AUTOMATED_GATES_PASSED' if review.get('pipeline_gate_passed') is True else 'NOT_APPROVED'}",
                 f"- Video: {review.get('video_file', '')}",
                 f"- Visual review basis: {review.get('visual_review_basis', '')}",
                 f"- Contact sheet: {review.get('contact_sheet_file', '')}",
                 f"- Caption contact sheet: {review.get('caption_contact_sheet_file', '')}",
-                f"- Status: {review.get('publish_status', '')}",
+                f"- Gemini raw status: {review.get('publish_status', '')}",
                 f"- Pipeline gate passed: {review.get('pipeline_gate_passed', '')}",
-                f"- Must not publish: {review.get('must_not_publish', '')}",
+                f"- Current upstream script approved: {review.get('upstream_script_approved', False)}",
+                f"- Deterministic evidence passed: {(review.get('deterministic_checks') or {}).get('passed', False)}",
+                f"- Evidence limitation: {(review.get('deterministic_checks') or {}).get('limitation', '')}",
+                f"- Gemini raw must_not_publish flag: {review.get('must_not_publish', '')}",
                 f"- Actual video reviewed: {review.get('actual_video_reviewed', '')}",
                 f"- Medical safety score: {review.get('medical_safety_score', '')}/5",
                 f"- Accuracy score: {review.get('accuracy_score', '')}/5",
@@ -407,7 +505,7 @@ def render_text_report(reviews: List[Dict[str, Any]]) -> str:
                 f"- Video/script match score: {review.get('video_script_match_score', '')}/5",
                 f"- Caption render score: {review.get('caption_render_score', '')}/5",
                 "",
-                "Summary:",
+                "Gemini summary (not the publication decision):",
                 str(review.get("summary_ko", "")),
                 "",
                 "Observed visuals:",
@@ -495,21 +593,14 @@ def main() -> None:
         prior_review_path = output_dir / "final_quality_review.json"
         if args.resume and prior_review_path.exists():
             prior_review = load_json(prior_review_path)
-            if prior_review.get("pipeline_gate_passed") is True:
-                prior_review["visual_review_basis"] = (
-                    "sampled_frames_contact_sheet"
-                    if prior_review.get("contact_sheet_file")
-                    else "uploaded_final_video"
-                )
-                prior_review_path.write_text(
-                    json.dumps(prior_review, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+            current_script = script_review_current(build_pipeline_paths(output_dir / "script.json", output_dir), model)
+            if (current_script and final_review_passed(prior_review) and prior_review.get("evidence_fingerprint") ==
+                    final_evidence_fingerprint(output_dir, model, args.visual_input)):
                 print(f"Resume: existing final review passed: {output_dir}")
                 reviews.append(prior_review)
                 continue
         print(f"Gemini final video medical review: {output_dir}")
-        reviews.append(review_output_dir(output_dir, model, args.visual_input))
+        reviews.append(review_output_dir(output_dir, model, args.visual_input, allow_incomplete_evidence=args.allow_failures))
 
     args.json_report.parent.mkdir(parents=True, exist_ok=True)
     args.json_report.write_text(json.dumps(reviews, ensure_ascii=False, indent=2), encoding="utf-8")

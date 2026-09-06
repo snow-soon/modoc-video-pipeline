@@ -426,8 +426,7 @@ def make_background_clip(paths: PipelinePaths, block_id: str, duration: float):
     video_path = get_scene_video_path(paths, block_id)
 
     if not video_path.exists():
-        print(f"Block {block_id}: asset missing, using dark fallback background")
-        return set_clip_duration(make_fallback_background(duration), duration)
+        raise FileNotFoundError(f"Missing video for block {block_id}; refusing a blank fallback.")
 
     print(f"Block {block_id}: using asset {video_path.name}")
 
@@ -534,7 +533,7 @@ def render_video(paths: PipelinePaths, script: dict, timing_plan: dict, audio_cl
             "text_width": CAPTION_TEXT_WIDTH,
         },
         "captions": caption_layouts,
-        "passed": all(
+        "passed": bool(caption_layouts) and all(
             layout["word_tokens_preserved"]
             and layout["screen_bottom_margin"] >= CAPTION_BOTTOM_MARGIN
             and layout["padding"]["bottom"] >= CAPTION_VERTICAL_PADDING_BOTTOM - 2
@@ -569,6 +568,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render a final video for one pipeline run.")
     parser.add_argument("--input", required=True, help="Path to the authored script_plan.json file.")
     parser.add_argument("--output", required=True, help="Path to the output directory for this run.")
+    parser.add_argument("--resume", action="store_true", help="Reuse unchanged FFmpeg scenes.")
     return parser.parse_args()
 
 
@@ -582,27 +582,8 @@ def main() -> None:
 
     optimize_assets(paths)
 
-    script = load_script(paths)
-    timing_plan = load_timing_plan(paths)
-    captions = load_captions(paths)
-    audio_clip = AudioFileClip(str(paths.audio_file))
-
-    final_video = render_video(paths, script, timing_plan, audio_clip, captions)
-
-    final_video.write_videofile(
-        str(paths.final_video_file),
-        fps=FPS,
-        codec="libx264",
-        audio_codec="aac",
-        preset="veryfast",
-        threads=max(1, os.cpu_count() or 4),
-        ffmpeg_params=["-movflags", "+faststart"],
-    )
-
-    final_video.close()
-    audio_clip.close()
-
-    print(f"Created {paths.final_video_file}")
+    from render_ffmpeg import render_final_video
+    render_final_video(paths, resume=args.resume)
 
 
 if __name__ == "__main__":

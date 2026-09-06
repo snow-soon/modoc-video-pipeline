@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from generate_script import normalize_script_plan
-from validate_visuals import coerce_score, gemini_json, get_gemini_client, get_review_model
+from validate_visuals import coerce_score, gemini_json, get_gemini_client, get_review_model, unsafe_findings, verify_revision_preserves_safety
+from medical_evidence import collect_medical_evidence
+from pipeline_state import atomic_json, file_digest, fingerprint
 
 
 LANGUAGES = ("ko", "en", "es")
@@ -56,6 +58,7 @@ def compact_plans(plans: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]
 def build_revision_prompt(
     plans: Dict[str, Dict[str, Any]],
     previous_findings: Optional[List[Dict[str, Any]]] = None,
+    evidence: Optional[Dict] = None,
 ) -> str:
     """Build a source-aware multilingual correction prompt."""
     return (
@@ -65,6 +68,8 @@ def build_revision_prompt(
         "urgency. The authoritative source notes constrain the claims. Keep the same topic, language, block IDs "
         "and order. Keep narration concise, captions short, and visual keywords concrete English stock-footage "
         "queries. Do not add diagnoses, medication doses, or unreferenced thresholds. Return all three complete "
+        "scripts without dropping original warnings or weakening urgency. Source-note omissions are not evidence "
+        "that a warning is incorrect: use retrieved article text and flag source gaps for clinician review. "
         "corrected scripts even when no change is needed. Return only JSON with this exact shape:\n"
         "{\n"
         '  "status": "approved | needs_revision | blocked",\n'
@@ -77,16 +82,21 @@ def build_revision_prompt(
         "1-2 for blocked or unsafe. If status is approved and there are no mandatory findings, score must be "
         "4 or 5. Never return approved with score 1-3.\n\n"
         f"PREVIOUS_FINDINGS:\n{json.dumps(previous_findings or [], ensure_ascii=False, indent=2)}\n\n"
-        f"SCRIPTS:\n{json.dumps(compact_plans(plans), ensure_ascii=False, indent=2)}"
+        f"SCRIPTS:\n{json.dumps(compact_plans(plans), ensure_ascii=False, indent=2)}\n"
+        f"RETRIEVED_REFERENCES:\n{json.dumps(evidence or {}, ensure_ascii=False)}"
     )
 
 
-def build_verification_prompt(plans: Dict[str, Dict[str, Any]]) -> str:
+def build_verification_prompt(plans: Dict[str, Dict[str, Any]], evidence: Optional[Dict] = None) -> str:
     """Build an independent final equivalence and safety check."""
     return (
         "Independently verify this Korean-English-Spanish pediatric video script set. Do not rewrite it. Check "
-        "medical accuracy against the listed source notes, conditional reassurance, proportionate red flags, "
+        "medical accuracy against retrieved reference text (source notes are incomplete summaries), conditional reassurance, proportionate red flags, "
         "natural native wording, exact cross-language meaning, matching block IDs, and captions that do not "
+        "change the logic of warning signs. Compare OR versus AND explicitly in every language: independently "
+        "sufficient symptoms must not become a combination that must occur together. For example, Korean '-고' "
+        "joining symptoms can require both, whereas '-거나', English 'or', and Spanish 'o' express alternatives. "
+        "Reject such a mismatch even when both versions sound fluent or are medically plausible in isolation. "
         "introduce stronger claims. Return only JSON:\n"
         "{\n"
         '  "status": "approved | needs_revision | blocked",\n'
@@ -99,7 +109,8 @@ def build_verification_prompt(plans: Dict[str, Dict[str, Any]]) -> str:
         "Use score 5 for publication-ready, 4 for safe with optional polish, 3 for mandatory revision, and "
         "1-2 for blocked or unsafe. If status is approved and all checks are true, score must be 4 or 5. "
         "Never return approved with score 1-3.\n\n"
-        f"SCRIPTS:\n{json.dumps(compact_plans(plans), ensure_ascii=False, indent=2)}"
+        f"SCRIPTS:\n{json.dumps(compact_plans(plans), ensure_ascii=False, indent=2)}\n"
+        f"RETRIEVED_REFERENCES:\n{json.dumps(evidence or {}, ensure_ascii=False)}"
     )
 
 
@@ -151,8 +162,9 @@ def verification_passed(review: Dict[str, Any]) -> bool:
     checks = review.get("checks") or {}
     return (
         review.get("status") == "approved"
-        and review.get("must_not_publish") is not True
+        and review.get("must_not_publish") is False
         and coerce_score(review.get("score")) >= 4
+        and not unsafe_findings(review.get("findings"))
         and all(checks.get(key) is True for key in (
             "medical_equivalence",
             "warnings_equivalent",
@@ -160,6 +172,28 @@ def verification_passed(review: Dict[str, Any]) -> bool:
             "captions_faithful",
         ))
     )
+
+
+def verify_rendered_scripts(output_dir: Path, model: Optional[str] = None) -> Dict:
+    """Check the actual post-correction scripts, not just the earlier authored trio."""
+    plans = {language: normalize_script_plan(json.loads((output_dir / language / "script.json").read_text(encoding="utf-8")))
+             for language in LANGUAGES}
+    validate_parallel_structure(plans)
+    resolved_model = get_review_model(model)
+    evidence = collect_medical_evidence(plans["ko"], output_dir)
+    client = get_gemini_client()
+    try:
+        review = gemini_json(client, resolved_model, build_verification_prompt(plans, evidence))
+    finally:
+        client.close()
+    report = {"passed": verification_passed(review), "review": review, "model": resolved_model,
+              "script_fingerprints": {lang: fingerprint(plan) for lang, plan in plans.items()},
+              "policy_sha256": file_digest(Path(__file__))}
+    path = output_dir / "rendered_multilingual_review.json"
+    atomic_json(path, report)
+    if not report["passed"]:
+        raise RuntimeError(f"Post-correction multilingual equivalence failed: {path}")
+    return report
 
 
 def prepare_multilingual_plans(
@@ -170,6 +204,7 @@ def prepare_multilingual_plans(
 ) -> Dict[str, Any]:
     """Correct and independently verify a three-language publication set."""
     plans = load_plans(input_dir)
+    evidence = collect_medical_evidence(plans["ko"], output_dir)
     client = get_gemini_client()
     resolved_model = get_review_model(model)
     history = []
@@ -180,12 +215,18 @@ def prepare_multilingual_plans(
         revision_review = gemini_json(
             client,
             resolved_model,
-            build_revision_prompt(plans, previous_findings),
+            build_revision_prompt(plans, previous_findings, evidence),
         )
-        plans = normalize_revised_plans(revision_review.get("revised_scripts"), plans)
+        candidate = normalize_revised_plans(revision_review.get("revised_scripts"), plans)
+        safety = verify_revision_preserves_safety(client, resolved_model, plans, candidate, evidence)
+        revision_review["safety_preservation_review"] = safety
+        if not safety["passed"]:
+            atomic_json(output_dir / "rejected_multilingual_revision.json", revision_review)
+            raise RuntimeError("Multilingual correction changed safety warnings; clinician review required.")
+        plans = candidate
 
         print("Gemini multilingual independent verification")
-        verification = gemini_json(client, resolved_model, build_verification_prompt(plans))
+        verification = gemini_json(client, resolved_model, build_verification_prompt(plans, evidence))
         history.append(
             {
                 "round": round_number,
@@ -222,15 +263,21 @@ def prepare_multilingual_plans(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify and align ko/en/es script plans with Gemini.")
-    parser.add_argument("--input-dir", type=Path, required=True)
+    parser.add_argument("--input-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS)
+    parser.add_argument("--verify-rendered", action="store_true", help="Verify output-dir/{ko,en,es}/script.json without rewriting.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.verify_rendered:
+        verify_rendered_scripts(args.output_dir.expanduser().resolve(), args.model)
+        return
+    if not args.input_dir:
+        raise ValueError("--input-dir is required unless --verify-rendered is used.")
     prepare_multilingual_plans(
         input_dir=args.input_dir.expanduser().resolve(),
         output_dir=args.output_dir.expanduser().resolve(),

@@ -38,6 +38,14 @@ class PipelinePaths:
         return self.output_dir / "narration.wav"
 
     @property
+    def audio_segments_file(self) -> Path:
+        return self.output_dir / "audio_segments.json"
+
+    @property
+    def audio_segments_dir(self) -> Path:
+        return self.output_dir / "audio_segments"
+
+    @property
     def captions_file(self) -> Path:
         return self.output_dir / "captions.srt"
 

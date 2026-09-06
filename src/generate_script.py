@@ -38,6 +38,7 @@ def normalize_string_list(
     field_name: str,
     context: str,
     allow_empty: bool = False,
+    deduplicate: bool = True,
 ) -> List[str]:
     """Normalize one-or-many string fields into a clean list."""
     if isinstance(value, str):
@@ -56,7 +57,7 @@ def normalize_string_list(
 
         cleaned = normalize_text(item, f"{context}.{field_name}")
         lowered = cleaned.lower()
-        if lowered not in seen:
+        if not deduplicate or lowered not in seen:
             seen.add(lowered)
             normalized.append(cleaned)
 
@@ -69,7 +70,11 @@ def normalize_string_list(
 def build_narration(blocks: List[Dict[str, Any]], authored_narration: Any) -> str:
     """Use authored narration when present, otherwise join block narration."""
     if isinstance(authored_narration, str) and authored_narration.strip():
-        return normalize_text(authored_narration, "script_plan.narration")
+        narration = normalize_text(authored_narration, "script_plan.narration")
+        joined = " ".join(block["narration"] for block in blocks)
+        if narration.split() != joined.split():
+            raise ValueError("Full narration differs from block narration; audio and scenes would disagree.")
+        return narration
 
     return " ".join(block["narration"] for block in blocks).strip()
 
@@ -128,9 +133,11 @@ def normalize_block(
         block_id = f"block_{block_index + 1}"
     else:
         block_id = block_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", block_id):
+        raise ValueError(f"{context}.id must be a filename-safe block identifier.")
 
     narration = require_non_empty_string(block, "narration", context)
-    captions = normalize_string_list(block.get("captions", []), "captions", context)
+    captions = normalize_string_list(block.get("captions", []), "captions", context, deduplicate=False)
     visual_keywords = normalize_string_list(
         block.get("visual_keywords", []),
         "visual_keywords",
@@ -154,13 +161,22 @@ def normalize_block(
             seen.add(lowered)
             avoid_visuals.append(item)
 
-    return {
+    normalized = {
         "id": block_id,
         "narration": narration,
         "captions": captions,
         "visual_keywords": visual_keywords,
         "avoid_visuals": avoid_visuals,
     }
+    if "narration_segments" in block:
+        segments = block["narration_segments"]
+        if not isinstance(segments, list) or len(segments) != len(captions):
+            raise ValueError(f"{context}.narration_segments must map one speech segment to each caption.")
+        segments = [normalize_text(s, context) if isinstance(s, str) else "" for s in segments]
+        if not all(segments) or " ".join(segments).split() != narration.split():
+            raise ValueError(f"{context}.narration_segments must preserve the complete narration exactly.")
+        normalized["narration_segments"] = segments
+    return normalized
 
 
 def normalize_script_plan(script_plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -186,6 +202,9 @@ def normalize_script_plan(script_plan: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(raw_block, dict):
             raise ValueError(f"blocks[{index}] must be an object.")
         blocks.append(normalize_block(raw_block, index, global_avoid_visuals))
+
+    if len({block["id"].casefold() for block in blocks}) != len(blocks):
+        raise ValueError("Block IDs must be unique.")
 
     narration = build_narration(blocks, script_plan.get("narration"))
 

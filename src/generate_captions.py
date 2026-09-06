@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import unicodedata
 import wave
 from typing import Dict, List, Tuple
 
 from pipeline_paths import PipelinePaths, build_pipeline_paths
+from pipeline_state import atomic_json, file_digest, fingerprint, read_json
+from generate_tts import speech_segments
 
 
 def seconds_to_srt_timestamp(seconds: float) -> str:
@@ -85,14 +88,81 @@ def write_captions_srt(paths: PipelinePaths, captions: List[Dict]) -> None:
     print(f"Created {paths.captions_file}")
 
 
-def build_timing_plan(script: Dict, audio_duration: float) -> Tuple[List[Dict], Dict]:
+def measured_ranges(script: Dict, manifest: Dict, audio_duration: float) -> Dict:
+    """Validate sample-level evidence before using it for scene or caption timing."""
+    if manifest.get("narration_fingerprint") != fingerprint(speech_segments(script)):
+        raise ValueError("Speech segment manifest is stale for this script.")
+    rate = manifest.get("sample_rate", 0)
+    segments = manifest.get("segments", [])
+    expected = speech_segments(script)
+    if rate != 24000 or len(segments) != len(expected):
+        raise ValueError("Invalid speech segment manifest.")
+    offset = 0
+    result = {}
+    for segment, wanted in zip(segments, expected):
+        start, end = segment.get("start_frame"), segment.get("end_frame")
+        if any(segment.get(key) != value for key, value in wanted.items()):
+            raise ValueError("Speech segment text or order changed.")
+        if type(start) is not int or type(end) is not int or start != offset or end <= start:
+            raise ValueError("Speech segment boundaries are invalid or discontinuous.")
+        result.setdefault(segment["block_id"], []).append((start / rate, end / rate, segment["caption_index"]))
+        offset = end
+    if offset != manifest.get("total_frames") or abs(offset / rate - audio_duration) > 1 / rate:
+        raise ValueError("Measured speech duration does not match narration.wav.")
+    return result
+
+
+def validate_timing_plan(script: Dict, plan: Dict, captions: List[Dict], audio_duration: float) -> None:
+    """Fail closed on missing, reordered, overlapping, or stale timing data."""
+    if not math.isfinite(audio_duration) or audio_duration <= 0:
+        raise ValueError("Audio duration must be finite and positive.")
+    blocks = plan.get("blocks", [])
+    if not blocks or [b["id"] for b in blocks] != [b["id"] for b in script["blocks"]]:
+        raise ValueError("Timing blocks do not match the script.")
+    if abs(plan.get("audio_duration", 0) - audio_duration) > .002:
+        raise ValueError("Timing plan has a stale audio duration.")
+    flattened = []
+    for source, block in zip(script["blocks"], blocks):
+        if block.get("narration") != source["narration"]:
+            raise ValueError("Timing plan has stale narration.")
+        entries = block.get("captions", [])
+        if [c["text"] for c in entries] != source["captions"]:
+            raise ValueError("Timing captions do not match the script.")
+        validate_ranges(entries, block["start"], block["end"])
+        flattened.extend(entries)
+    validate_ranges(blocks, 0, audio_duration)
+    validate_ranges(captions, 0, audio_duration)
+    if len(flattened) != len(captions):
+        raise ValueError("Caption count differs from timing plan.")
+    for expected, actual in zip(flattened, captions):
+        if expected["text"] != actual["text"] or any(abs(expected[k] - actual[k]) > .002 for k in ("start", "end")):
+            raise ValueError("SRT captions differ from timing plan.")
+
+
+def validate_ranges(entries: List[Dict], start: float, end: float) -> None:
+    cursor = start
+    if not entries:
+        raise ValueError("Empty caption or scene timeline.")
+    for entry in entries:
+        left, right = entry.get("start"), entry.get("end")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (left, right)):
+            raise ValueError("Timeline contains non-finite boundaries.")
+        if abs(left - cursor) > .002 or right - left < .001:
+            raise ValueError("Timeline has gaps, overlaps, or zero-length entries.")
+        cursor = right
+    if abs(cursor - end) > .002:
+        raise ValueError("Timeline does not cover its full duration.")
+
+
+def build_timing_plan(script: Dict, audio_duration: float, manifest: Dict = None) -> Tuple[List[Dict], Dict]:
     """Build caption timings and per-block timing metadata."""
     blocks = script.get("blocks", [])
     if not blocks:
         raise ValueError("script.json does not contain any blocks.")
 
-    block_narrations = [block["narration"] for block in blocks]
-    block_ranges = distribute_segments(block_narrations, 0.0, audio_duration)
+    measured = measured_ranges(script, manifest, audio_duration) if manifest else {}
+    block_ranges = ([(measured[b["id"]][0][0], measured[b["id"]][-1][1]) for b in blocks]
+                    if measured else distribute_segments([b["narration"] for b in blocks], 0.0, audio_duration))
 
     caption_entries = []
     timing_blocks = []
@@ -101,6 +171,11 @@ def build_timing_plan(script: Dict, audio_duration: float) -> Tuple[List[Dict], 
     for block, (block_start, block_end) in zip(blocks, block_ranges):
         block_captions = block.get("captions") or [block["narration"]]
         caption_ranges = distribute_segments(block_captions, block_start, block_end)
+        caption_basis = "estimated_text_weight"
+        segment_ranges = measured.get(block["id"], [])
+        if segment_ranges and all(segment[2] is not None for segment in segment_ranges):
+            caption_ranges = [(start, end) for start, end, _ in segment_ranges]
+            caption_basis = "measured_speech_segments"
         timing_captions = []
 
         for caption_text, (caption_start, caption_end) in zip(block_captions, caption_ranges):
@@ -128,6 +203,7 @@ def build_timing_plan(script: Dict, audio_duration: float) -> Tuple[List[Dict], 
                 "start": block_start,
                 "end": block_end,
                 "duration": block_end - block_start,
+                "caption_timing_basis": caption_basis,
                 "narration": block["narration"],
                 "captions": timing_captions,
                 "visual_keywords": block.get("visual_keywords", []),
@@ -139,8 +215,10 @@ def build_timing_plan(script: Dict, audio_duration: float) -> Tuple[List[Dict], 
         "title": script.get("title", ""),
         "language": script.get("language", ""),
         "audio_duration": audio_duration,
+        "scene_timing_basis": "measured_speech_segments" if measured else "estimated_text_weight",
         "blocks": timing_blocks,
     }
+    validate_timing_plan(script, timing_plan, caption_entries, audio_duration)
     return caption_entries, timing_plan
 
 
@@ -148,16 +226,17 @@ def generate_captions(paths: PipelinePaths) -> str:
     """Generate SRT captions and timing plan from authored captions."""
     script = load_script(paths)
     audio_duration = get_audio_duration(paths)
-    caption_timings, timing_plan = build_timing_plan(script, audio_duration)
+    manifest = read_json(paths.audio_segments_file)
+    if not manifest or manifest.get("audio_sha256") != file_digest(paths.audio_file):
+        raise ValueError("Missing or stale measured audio manifest. Regenerate TTS before captions.")
+    caption_timings, timing_plan = build_timing_plan(script, audio_duration, manifest)
+    timing_plan["audio_sha256"] = manifest["audio_sha256"]
 
     print(f"Narration duration: {audio_duration:.2f} seconds")
     print(f"Generated {len(caption_timings)} authored caption entries")
 
     write_captions_srt(paths, caption_timings)
-    paths.timing_plan_file.write_text(
-        json.dumps(timing_plan, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_json(paths.timing_plan_file, timing_plan)
     print(f"Created {paths.timing_plan_file}")
     return str(paths.captions_file)
 
