@@ -60,6 +60,7 @@ def render_final_video(paths, resume: bool = False) -> str:
     work.mkdir(parents=True, exist_ok=True)
     layout_entries = []
     scene_files = []
+    scene_frames = []
     previous_frame = 0
     policy = [file_digest(Path(__file__)), file_digest(Path(__file__).with_name("render_video.py"))]
 
@@ -115,6 +116,7 @@ def render_final_video(paths, resume: bool = False) -> str:
                 temporary.unlink(missing_ok=True)
             cache.record(f"render_scene_{scene_index}", inputs, [scene])
         scene_files.append(scene)
+        scene_frames.append(frames)
 
     layout_report = {
         "version": 2, "language": script["language"], "video_size": [VIDEO_WIDTH, VIDEO_HEIGHT],
@@ -137,7 +139,10 @@ def render_final_video(paths, resume: bool = False) -> str:
         print(f"Resume: rendered video and verification evidence unchanged: {paths.final_video_file}")
         return str(paths.final_video_file)
     concat = work / "scenes.ffconcat"
-    concat.write_text("ffconcat version 1.0\n" + "".join(f"file '{scene.name}'\n" for scene in scene_files), encoding="ascii")
+    # Container durations may be rounded below the last frame; use our exact frame grid for every join.
+    concat.write_text("ffconcat version 1.0\n" + "".join(
+        f"file '{scene.name}'\nduration {frames / FPS:.9f}\n"
+        for scene, frames in zip(scene_files, scene_frames)), encoding="ascii")
     temporary = work / "final.tmp.mp4"
     try:
         run_ffmpeg(["-f", "concat", "-safe", "1", "-i", str(concat), "-i", str(paths.audio_file),

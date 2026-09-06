@@ -444,6 +444,9 @@ class FFmpegIntegrationTests(unittest.TestCase):
                 atomic_json(paths.audio_segments_file, manifest)
                 generate_captions(paths)
                 render_final_video(paths)
+                self.assertEqual((paths.output_dir / "render_work/scenes.ffconcat").read_text().splitlines(),
+                                 ["ffconcat version 1.0", "file 'scene_000.mp4'", "duration 1.000000000",
+                                  "file 'scene_001.mp4'", "duration 1.000000000"])
                 self.assertTrue(validate_render(paths.final_video_file, 2)["passed"])
                 self.assertTrue(deterministic_video_checks(paths.output_dir)["passed"])
                 for timestamp, channel in ((.5, 0), (1.0, 1), (1.5, 1)):
