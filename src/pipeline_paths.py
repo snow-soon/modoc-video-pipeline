@@ -22,6 +22,14 @@ class PipelinePaths:
         return self.output_dir / "script.json"
 
     @property
+    def original_script_file(self) -> Path:
+        return self.output_dir / "script.original.json"
+
+    @property
+    def script_revision_history_file(self) -> Path:
+        return self.output_dir / "script_revision_history.json"
+
+    @property
     def narration_text_file(self) -> Path:
         return self.output_dir / "narration.txt"
 
@@ -42,8 +50,24 @@ class PipelinePaths:
         return self.output_dir / "assets.json"
 
     @property
+    def rejected_assets_file(self) -> Path:
+        return self.output_dir / "rejected_assets.json"
+
+    @property
     def final_video_file(self) -> Path:
         return self.output_dir / "final_video.mp4"
+
+    @property
+    def caption_layout_file(self) -> Path:
+        return self.output_dir / "caption_layout.json"
+
+    @property
+    def asset_optimization_file(self) -> Path:
+        return self.output_dir / "asset_optimization.json"
+
+    @property
+    def final_quality_review_file(self) -> Path:
+        return self.output_dir / "final_quality_review.json"
 
     @property
     def validation_report_file(self) -> Path:

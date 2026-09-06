@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import unicodedata
 from typing import Any, Dict, List
 
@@ -15,6 +16,12 @@ def normalize_text(value: str, context: str) -> str:
     normalized = unicodedata.normalize("NFC", value.strip())
     if "\ufffd" in normalized:
         raise ValueError(f"{context} contains the Unicode replacement character; check file encoding.")
+    if any(unicodedata.category(character) == "Cc" and character not in "\n\r\t" for character in normalized):
+        raise ValueError(f"{context} contains an unexpected control character; check file encoding.")
+
+    mojibake_pattern = re.compile(r"(?:Ã.|Â.|â(?:€|€™|€œ|€\x9d|€“|€”))")
+    if mojibake_pattern.search(normalized):
+        raise ValueError(f"{context} appears to contain mojibake; save the source as UTF-8.")
     return normalized
 
 
@@ -62,9 +69,50 @@ def normalize_string_list(
 def build_narration(blocks: List[Dict[str, Any]], authored_narration: Any) -> str:
     """Use authored narration when present, otherwise join block narration."""
     if isinstance(authored_narration, str) and authored_narration.strip():
-        return authored_narration.strip()
+        return normalize_text(authored_narration, "script_plan.narration")
 
     return " ".join(block["narration"] for block in blocks).strip()
+
+
+def normalize_medical_sources(value: Any) -> List[Dict[str, str]]:
+    """Normalize optional authoritative source notes used by Gemini reviewers."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("script_plan.medical_sources must be a list.")
+
+    normalized_sources = []
+    for index, source in enumerate(value):
+        context = f"script_plan.medical_sources[{index}]"
+        if not isinstance(source, dict):
+            raise ValueError(f"{context} must be an object.")
+
+        title = require_non_empty_string(source, "title", context)
+        url = require_non_empty_string(source, "url", context)
+        supports = require_non_empty_string(source, "supports", context)
+        if not url.startswith(("https://", "http://")):
+            raise ValueError(f"{context}.url must be an HTTP(S) URL.")
+        normalized_sources.append({"title": title, "url": url, "supports": supports})
+
+    return normalized_sources
+
+
+def normalize_source_reference(value: Any) -> Dict[str, Any]:
+    """Keep a compact audit reference back to the selected spreadsheet row."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("script_plan.source_reference must be an object.")
+
+    allowed_fields = ("workbook", "sheet", "row", "item_no")
+    normalized = {}
+    for field in allowed_fields:
+        field_value = value.get(field)
+        if isinstance(field_value, str) and field_value.strip():
+            normalized[field] = normalize_text(field_value, f"script_plan.source_reference.{field}")
+        elif isinstance(field_value, (int, float)):
+            normalized[field] = field_value
+    return normalized
 
 
 def normalize_block(
@@ -141,12 +189,21 @@ def normalize_script_plan(script_plan: Dict[str, Any]) -> Dict[str, Any]:
 
     narration = build_narration(blocks, script_plan.get("narration"))
 
-    return {
+    normalized_script = {
         "title": title,
         "language": language,
         "narration": narration,
         "blocks": blocks,
     }
+    medical_sources = normalize_medical_sources(script_plan.get("medical_sources"))
+    if medical_sources:
+        normalized_script["medical_sources"] = medical_sources
+
+    source_reference = normalize_source_reference(script_plan.get("source_reference"))
+    if source_reference:
+        normalized_script["source_reference"] = source_reference
+
+    return normalized_script
 
 
 def load_script_plan(paths: PipelinePaths) -> Dict[str, Any]:

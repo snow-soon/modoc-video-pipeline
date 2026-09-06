@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from typing import List, Optional
 
 import requests
 
@@ -19,13 +20,20 @@ def load_assets(paths: PipelinePaths) -> list:
         return json.load(file)
 
 
-def download_assets(paths: PipelinePaths) -> None:
-    """Download assets into the run-specific assets directory."""
+def download_assets(
+    paths: PipelinePaths,
+    block_ids: Optional[List[str]] = None,
+    overwrite: bool = False,
+) -> None:
+    """Download all or selected assets into the run-specific asset directory."""
     paths.ensure_directories()
     assets = load_assets(paths)
+    target_block_ids = set(block_ids or [asset.get("block_id", "") for asset in assets])
 
     for asset in assets:
         block_id = asset.get("block_id", "unknown_block")
+        if block_id not in target_block_ids:
+            continue
         print(f"Downloading asset for {block_id}...")
 
         download_url = asset.get("download_url")
@@ -34,7 +42,7 @@ def download_assets(paths: PipelinePaths) -> None:
             continue
 
         output_path = paths.assets_dir / f"{block_id}.mp4"
-        if output_path.exists():
+        if output_path.exists() and not overwrite:
             print(f"Already exists: {output_path}")
             continue
 

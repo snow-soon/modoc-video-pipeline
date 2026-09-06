@@ -1,13 +1,15 @@
 """Render a vertical video synchronized to narration, captions, and block timings."""
 
-import json
 import argparse
+import json
+import os
 import re
 import unicodedata
 from pathlib import Path
 from typing import Optional
 
-from PIL import ImageFont
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 try:
     # MoviePy 2.x style imports.
@@ -15,7 +17,7 @@ try:
         AudioFileClip,
         ColorClip,
         CompositeVideoClip,
-        TextClip,
+        ImageClip,
         VideoFileClip,
         concatenate_videoclips,
     )
@@ -25,12 +27,13 @@ except ImportError:
         AudioFileClip,
         ColorClip,
         CompositeVideoClip,
-        TextClip,
+        ImageClip,
         VideoFileClip,
         concatenate_videoclips,
     )
 
 from pipeline_paths import PipelinePaths, build_pipeline_paths
+from optimize_assets import optimize_assets
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -41,16 +44,18 @@ BACKGROUND_COLOR = (18, 18, 18)
 CAPTION_COLOR = "white"
 CAPTION_STROKE_COLOR = "black"
 CAPTION_STROKE_WIDTH = 3
-CAPTION_SIDE_MARGIN = 36
-CAPTION_HORIZONTAL_PADDING = 36
-CAPTION_VERTICAL_PADDING = 28
+CAPTION_SIDE_MARGIN = 48
+CAPTION_HORIZONTAL_PADDING = 42
+CAPTION_VERTICAL_PADDING_TOP = 32
+CAPTION_VERTICAL_PADDING_BOTTOM = 44
 CAPTION_BOX_WIDTH = VIDEO_WIDTH - (CAPTION_SIDE_MARGIN * 2)
 CAPTION_TEXT_WIDTH = CAPTION_BOX_WIDTH - (CAPTION_HORIZONTAL_PADDING * 2)
-CAPTION_MAX_HEIGHT = 300
-CAPTION_TOP_RATIO = 0.62
-CAPTION_BOTTOM_MARGIN = 280
-CAPTION_INTERLINE = 10
-FONT_SIZES = [74, 70, 66, 62, 58, 54, 50, 46, 42]
+CAPTION_MAX_TEXT_HEIGHT = 276
+CAPTION_TOP_RATIO = 0.60
+CAPTION_BOTTOM_MARGIN = 360
+CAPTION_INTERLINE = 12
+CAPTION_MAX_LINES = 3
+FONT_SIZES = [72, 68, 64, 60, 56, 52, 48, 44, 40, 36]
 KOREAN_CAPTION_FONT_CANDIDATES = [
     "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
@@ -170,7 +175,8 @@ def get_measurement_font(font_path: Optional[str], font_size: int):
 def measure_text_width(text: str, font_path: Optional[str], font_size: int) -> int:
     """Measure text width without asking MoviePy to split words."""
     font = get_measurement_font(font_path, font_size)
-    bbox = font.getbbox(text)
+    draw = ImageDraw.Draw(Image.new("L", (1, 1), 0))
+    bbox = draw.textbbox((0, 0), text, font=font, stroke_width=CAPTION_STROKE_WIDTH)
     return max(int(bbox[2] - bbox[0]), 0)
 
 
@@ -204,6 +210,118 @@ def wrap_caption_text(text: str, font_path: Optional[str], font_size: int, max_w
         wrapped_lines.extend(wrap_caption_line(raw_line.strip(), font_path, font_size, max_width))
 
     return "\n".join(line for line in wrapped_lines if line)
+
+
+def caption_tokens_preserved(original_text: str, wrapped_text: str) -> bool:
+    """Return whether wrapping preserved every whitespace-delimited token exactly."""
+    return re.findall(r"\S+", original_text) == re.findall(r"\S+", wrapped_text)
+
+
+def measure_multiline_text(text: str, font: ImageFont.FreeTypeFont) -> tuple[int, int, tuple[int, int, int, int]]:
+    """Measure multiline text including its stroke and glyph descenders."""
+    draw = ImageDraw.Draw(Image.new("L", (1, 1), 0))
+    bbox = draw.multiline_textbbox(
+        (0, 0),
+        text,
+        font=font,
+        spacing=CAPTION_INTERLINE,
+        align="center",
+        stroke_width=CAPTION_STROKE_WIDTH,
+    )
+    return bbox[2] - bbox[0], bbox[3] - bbox[1], bbox
+
+
+def choose_caption_layout(text: str, language: str) -> dict:
+    """Choose a font and size that fit without splitting words or clipping glyphs."""
+    normalized_text = unicodedata.normalize("NFC", text.strip())
+    if not normalized_text:
+        raise ValueError("Caption text must not be empty.")
+
+    available_fonts = get_available_caption_fonts(language)
+    if not available_fonts:
+        raise RuntimeError(f"No caption font is available for language '{language}'.")
+
+    for font_path in available_fonts:
+        for font_size in FONT_SIZES:
+            font = ImageFont.truetype(font_path, font_size)
+            wrapped_text = wrap_caption_text(normalized_text, font_path, font_size, CAPTION_TEXT_WIDTH)
+            text_width, text_height, text_bbox = measure_multiline_text(wrapped_text, font)
+            line_count = wrapped_text.count("\n") + 1
+
+            if not caption_tokens_preserved(normalized_text, wrapped_text):
+                raise RuntimeError("Caption wrapping changed or split an authored word.")
+
+            if (
+                text_width <= CAPTION_TEXT_WIDTH
+                and text_height <= CAPTION_MAX_TEXT_HEIGHT
+                and line_count <= CAPTION_MAX_LINES
+            ):
+                return {
+                    "font_path": font_path,
+                    "font_size": font_size,
+                    "font": font,
+                    "wrapped_text": wrapped_text,
+                    "text_width": text_width,
+                    "text_height": text_height,
+                    "text_bbox": text_bbox,
+                    "line_count": line_count,
+                }
+
+    raise ValueError(
+        "Caption cannot fit the safe area without splitting a word. "
+        f"Shorten the authored caption: {normalized_text!r}"
+    )
+
+
+def render_caption_image(text: str, language: str) -> tuple[Image.Image, dict]:
+    """Render a caption on an explicit RGBA canvas with measured glyph padding."""
+    layout = choose_caption_layout(text, language)
+    text_bbox = layout["text_bbox"]
+    box_height = (
+        layout["text_height"]
+        + CAPTION_VERTICAL_PADDING_TOP
+        + CAPTION_VERTICAL_PADDING_BOTTOM
+    )
+    image = Image.new("RGBA", (CAPTION_BOX_WIDTH, box_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, CAPTION_BOX_WIDTH - 1, box_height - 1), fill=(0, 0, 0, 128))
+
+    text_x = (CAPTION_BOX_WIDTH - layout["text_width"]) / 2 - text_bbox[0]
+    text_y = CAPTION_VERTICAL_PADDING_TOP - text_bbox[1]
+    draw.multiline_text(
+        (text_x, text_y),
+        layout["wrapped_text"],
+        font=layout["font"],
+        fill=CAPTION_COLOR,
+        spacing=CAPTION_INTERLINE,
+        align="center",
+        stroke_width=CAPTION_STROKE_WIDTH,
+        stroke_fill=CAPTION_STROKE_COLOR,
+    )
+
+    rendered_text_bbox = (
+        int(round(text_x + text_bbox[0])),
+        int(round(text_y + text_bbox[1])),
+        int(round(text_x + text_bbox[2])),
+        int(round(text_y + text_bbox[3])),
+    )
+    metadata = {
+        "text": unicodedata.normalize("NFC", text),
+        "wrapped_text": layout["wrapped_text"],
+        "font_path": layout["font_path"],
+        "font_size": layout["font_size"],
+        "line_count": layout["line_count"],
+        "box_size": [CAPTION_BOX_WIDTH, box_height],
+        "text_bbox_in_box": list(rendered_text_bbox),
+        "padding": {
+            "left": rendered_text_bbox[0],
+            "top": rendered_text_bbox[1],
+            "right": CAPTION_BOX_WIDTH - rendered_text_bbox[2],
+            "bottom": box_height - rendered_text_bbox[3],
+        },
+        "word_tokens_preserved": caption_tokens_preserved(text, layout["wrapped_text"]),
+    }
+    return image, metadata
 
 
 def load_timing_plan(paths: PipelinePaths) -> dict:
@@ -320,88 +438,12 @@ def make_background_clip(paths: PipelinePaths, block_id: str, duration: float):
     return set_clip_duration(background_clip, duration)
 
 
-def build_text_clip(text: str, duration: float, font_size: int, language: str):
-    """Create one timed text clip attempt for a specific font size."""
-    font_candidates = get_available_caption_fonts(language) + [None]
-    last_error = None
-
-    for font_name in font_candidates:
-        wrapped_text = wrap_caption_text(text, font_name, font_size, CAPTION_TEXT_WIDTH)
-        try:
-            return TextClip(
-                text=wrapped_text,
-                font=font_name,
-                font_size=font_size,
-                color=CAPTION_COLOR,
-                stroke_color=CAPTION_STROKE_COLOR,
-                stroke_width=CAPTION_STROKE_WIDTH,
-                method="label",
-                text_align="center",
-                horizontal_align="center",
-                vertical_align="center",
-                interline=CAPTION_INTERLINE,
-                duration=duration,
-            )
-        except Exception as error:
-            last_error = error
-
-        try:
-            clip = TextClip(
-                txt=wrapped_text,
-                font=font_name,
-                fontsize=font_size,
-                color=CAPTION_COLOR,
-                stroke_color=CAPTION_STROKE_COLOR,
-                stroke_width=CAPTION_STROKE_WIDTH,
-                method="label",
-                align="center",
-                interline=CAPTION_INTERLINE,
-            )
-            return set_clip_duration(clip, duration)
-        except Exception as error:
-            last_error = error
-
-    raise RuntimeError(f"Could not create text clip: {last_error}")
-
-
 def make_caption_clip(text: str, start_time: float, end_time: float, language: str):
-    """Create one caption overlay clip from an SRT subtitle entry."""
+    """Create one caption overlay from a padded Pillow-rendered RGBA image."""
     duration = max(end_time - start_time, 0.01)
-    chosen_text_clip = None
-
-    for font_size in FONT_SIZES:
-        text_clip = build_text_clip(text, duration, font_size, language)
-
-        if text_clip.w <= CAPTION_BOX_WIDTH and text_clip.h <= CAPTION_MAX_HEIGHT:
-            chosen_text_clip = text_clip
-            break
-
-        if chosen_text_clip is None:
-            chosen_text_clip = text_clip
-
-    if chosen_text_clip is None:
-        raise RuntimeError("Could not build a caption clip.")
-
-    box_width = min(
-        max(chosen_text_clip.w + (CAPTION_HORIZONTAL_PADDING * 2), CAPTION_BOX_WIDTH),
-        VIDEO_WIDTH - (CAPTION_SIDE_MARGIN * 2),
-    )
-    box_height = chosen_text_clip.h + (CAPTION_VERTICAL_PADDING * 2)
-    box_clip = ColorClip(
-        size=(int(box_width), int(box_height)),
-        color=(0, 0, 0),
-        duration=duration,
-    )
-    box_clip = set_clip_opacity(box_clip, 0.45)
-
-    text_x = (box_width - chosen_text_clip.w) / 2
-    text_y = max((box_height - chosen_text_clip.h) / 2, CAPTION_VERTICAL_PADDING / 2)
-    text_clip = set_clip_position(chosen_text_clip, (text_x, text_y))
-
-    caption_group = CompositeVideoClip(
-        [box_clip, text_clip],
-        size=(int(box_width), int(box_height)),
-    )
+    caption_image, metadata = render_caption_image(text, language)
+    box_width, box_height = caption_image.size
+    caption_group = ImageClip(np.asarray(caption_image))
     caption_group = set_clip_duration(caption_group, duration)
 
     safe_top = int(VIDEO_HEIGHT * CAPTION_TOP_RATIO)
@@ -410,7 +452,21 @@ def make_caption_clip(text: str, start_time: float, end_time: float, language: s
     caption_top = max(caption_top, 80)
 
     caption_group = set_clip_position(caption_group, ("center", caption_top))
-    return set_clip_start(caption_group, start_time)
+    caption_group = set_clip_start(caption_group, start_time)
+    metadata.update(
+        {
+            "start": start_time,
+            "end": end_time,
+            "screen_bbox": [
+                CAPTION_SIDE_MARGIN,
+                caption_top,
+                CAPTION_SIDE_MARGIN + box_width,
+                caption_top + box_height,
+            ],
+            "screen_bottom_margin": VIDEO_HEIGHT - (caption_top + box_height),
+        }
+    )
+    return caption_group, metadata
 
 
 def make_scene_clip(paths: PipelinePaths, timing_block: dict):
@@ -440,21 +496,23 @@ def build_background_video(paths: PipelinePaths, audio_duration: float, timing_b
     return set_clip_duration(video, audio_duration)
 
 
-def build_caption_overlays(captions: list[dict], language: str) -> list:
-    """Build timed caption overlay clips from SRT entries."""
+def build_caption_overlays(captions: list[dict], language: str) -> tuple[list, list[dict]]:
+    """Build timed caption overlays and auditable layout metadata."""
     overlays = []
+    layout_entries = []
 
-    for caption in captions:
-        overlays.append(
-            make_caption_clip(
-                text=caption["text"],
-                start_time=caption["start"],
-                end_time=caption["end"],
-                language=language,
-            )
+    for index, caption in enumerate(captions, start=1):
+        overlay, layout = make_caption_clip(
+            text=caption["text"],
+            start_time=caption["start"],
+            end_time=caption["end"],
+            language=language,
         )
+        layout["index"] = index
+        overlays.append(overlay)
+        layout_entries.append(layout)
 
-    return overlays
+    return overlays, layout_entries
 
 
 def render_video(paths: PipelinePaths, script: dict, timing_plan: dict, audio_clip, captions: list[dict]):
@@ -462,8 +520,33 @@ def render_video(paths: PipelinePaths, script: dict, timing_plan: dict, audio_cl
     timing_blocks = timing_plan.get("blocks", [])
     background_video = build_background_video(paths, audio_clip.duration, timing_blocks)
     language = script.get("language", "")
-    caption_overlays = build_caption_overlays(captions, language)
+    caption_overlays, caption_layouts = build_caption_overlays(captions, language)
     available_fonts = get_available_caption_fonts(language)
+
+    caption_layout_report = {
+        "version": 1,
+        "language": language,
+        "video_size": [VIDEO_WIDTH, VIDEO_HEIGHT],
+        "safe_area": {
+            "side_margin": CAPTION_SIDE_MARGIN,
+            "bottom_margin": CAPTION_BOTTOM_MARGIN,
+            "max_lines": CAPTION_MAX_LINES,
+            "text_width": CAPTION_TEXT_WIDTH,
+        },
+        "captions": caption_layouts,
+        "passed": all(
+            layout["word_tokens_preserved"]
+            and layout["screen_bottom_margin"] >= CAPTION_BOTTOM_MARGIN
+            and layout["padding"]["bottom"] >= CAPTION_VERTICAL_PADDING_BOTTOM - 2
+            for layout in caption_layouts
+        ),
+    }
+    paths.caption_layout_file.write_text(
+        json.dumps(caption_layout_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if not caption_layout_report["passed"]:
+        raise RuntimeError(f"Caption layout safety check failed: {paths.caption_layout_file}")
 
     final_layers = [background_video] + caption_overlays
     final_video = CompositeVideoClip(final_layers, size=VIDEO_SIZE)
@@ -476,6 +559,7 @@ def render_video(paths: PipelinePaths, script: dict, timing_plan: dict, audio_cl
         print("Caption font: no known font file found, using MoviePy default")
     print(f"Render language: {script.get('language', 'unknown')}")
     print(f"Loaded {len(captions)} caption entries from captions.srt")
+    print(f"Caption layout QA: {paths.caption_layout_file}")
     print(f"Final video duration: {final_video.duration:.2f} seconds")
     return final_video
 
@@ -496,6 +580,8 @@ def main() -> None:
     if not paths.audio_file.exists():
         raise FileNotFoundError(f"Missing narration file: {paths.audio_file}")
 
+    optimize_assets(paths)
+
     script = load_script(paths)
     timing_plan = load_timing_plan(paths)
     captions = load_captions(paths)
@@ -508,6 +594,9 @@ def main() -> None:
         fps=FPS,
         codec="libx264",
         audio_codec="aac",
+        preset="veryfast",
+        threads=max(1, os.cpu_count() or 4),
+        ffmpeg_params=["-movflags", "+faststart"],
     )
 
     final_video.close()

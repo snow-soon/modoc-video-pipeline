@@ -1,23 +1,25 @@
 # Modoc Video Pipeline
 
-Semi-automated short-form video generation pipeline for human-authored, multi-language medical video scripts.
+Short-form multilingual medical video pipeline with Gemini correction gates and rendered-video QA.
 
 ## Overview
 
 This project converts human-authored script plans into short-form vertical videos using Text-to-Speech (TTS), stock media retrieval, and automated video rendering.
 
-The script plan JSON is the source of truth. The pipeline does not translate or rewrite narration. It only normalizes the authored plan, generates TTS, times captions, searches/downloads assets, and renders the final video.
+The authored plans remain unchanged as the audit source. Gemini writes verified copies under the topic output, then two independent reviewers can correct the runtime script before TTS. Every correction is recorded.
 
 ---
 
 ## Current Pipeline
 
 ```text
-Human-authored script_plan.json
+Korean / English / Spanish script plans
     ↓
-Script Normalization
+Gemini multilingual equivalence review + correction
     ↓
-Gemini Medical Script Review
+Independent Gemini clinical + language reviews
+    ↓
+Automatic script correction and re-review
     ↓
 Gemini TTS Generation
     ↓
@@ -27,11 +29,15 @@ Pexels Asset Candidate Retrieval
     ↓
 Stock Video Download
     ↓
-Gemini Visual Match Review
+Gemini full-clip visual match review
+    ↓
+Automatic failed-footage replacement and re-review
     ↓
 MoviePy Rendering
     ↓
-final_video.mp4
+Deterministic caption layout QA
+    ↓
+Gemini final MP4 + every-caption contact-sheet review
 ```
 
 ---
@@ -59,22 +65,28 @@ output/narration.txt
 
 ---
 
-### 2. Gemini Quality Review
+### 2. Gemini Quality Review And Correction
 
-Gemini is used as a review gate, not as the script author. It checks:
+Gemini is used as a bounded review-and-correction gate. It checks:
 
 * Medical safety and unsupported claims
 * Language corruption or broken characters
 * Whether visual keywords imply stronger medical claims than the narration
 * Whether selected/downloaded stock videos match each narration block
+* Whether all three languages preserve the same reassurance and warning level
+* Whether every rendered caption is intact and inside the safe area
 
 Generated output:
 
 ```text
 output/quality_review.json
+output/script.original.json
+output/script_revision_history.json
+output/caption_layout.json
+output/final_quality_review.json
 ```
 
-By default, the main pipeline stops before rendering if Gemini blocks the script or gives a selected video a low match/safety score.
+By default, mandatory script findings are corrected and reviewed again up to two times. Failed stock footage is replaced and reviewed again up to three times. The run blocks if those retries still fail.
 
 ---
 
@@ -107,6 +119,8 @@ Goals:
 * TTS and subtitles use authored source text
 * Block-based timing distribution
 * Caption-safe layout
+* Explicit bottom glyph padding and a 360-pixel platform-safe bottom margin
+* Whitespace-only line wrapping so an English or Spanish word is never split
 
 ---
 
@@ -238,12 +252,14 @@ modoc-video-pipeline/
 * Stock footage download
 * Gemini visual match review
 * Automated video rendering
-* Wide, word-safe caption rendering
+* Pillow-based caption rendering with deterministic glyph bounds
+* Automatic script correction and stock-footage replacement loops
+* Final MP4 and every-caption Gemini publication gate
 * Language-specific output isolation
 
-### In Progress
+### Still Required For Publication
 
-* Human review workflow
+* Human clinician sign-off for production medical content
 
 ---
 
@@ -255,6 +271,14 @@ modoc-video-pipeline/
 * Production-grade rendering pipeline
 
 ## CLI Usage
+
+The repository contains source code, tests, configuration examples, and input
+format examples. Production script plans, spreadsheets, media, and generated
+reports stay local and are excluded by `.gitignore`. Create your own
+`input/<topic>/script_plan.ko.json`, `script_plan.en.json`, and
+`script_plan.es.json` using `input/script_plan.example.json` before running the
+commands below. The topic names in these commands illustrate local content
+directories; production plans are not included in the repository.
 
 Run one language:
 
@@ -269,6 +293,8 @@ Run all three:
 ```bash
 ./scripts/run_all_languages.sh infant_nasal_regurgitation
 ```
+
+The multilingual runner now performs cross-language correction, generates Korean first, reuses its approved visual set for English and Spanish, validates each language against those clips, and writes the final medical report automatically.
 
 Quality review controls:
 
@@ -288,7 +314,7 @@ python3 src/validate_visuals.py --input input/infant_nasal_regurgitation/script_
 
 ## Multi-language Example
 
-Each language has its own authored script plan, and outputs are isolated by language under the chosen output directory. Gemini does not translate or rewrite scripts in this flow. The human-written script plan remains the source of truth for Korean, English, and Spanish.
+Each language has its own authored source plan, and outputs are isolated by language. Gemini corrections are written to `output/<topic>/verified_input`; files under `input/<topic>` are not overwritten.
 
 ```bash
 python3 src/main.py --input input/infant_nasal_regurgitation/script_plan.ko.json --output output/infant_nasal_regurgitation/ko
@@ -338,8 +364,12 @@ Optional quality/rendering controls:
 GEMINI_REVIEW_MODEL=gemini-2.5-flash
 GEMINI_QUALITY_REVIEW_MODE=video
 GEMINI_QUALITY_MIN_SCORE=4
+GEMINI_MAX_SCRIPT_REVISIONS=2
+GEMINI_MAX_VISUAL_REPLACEMENTS=3
 PEXELS_RESULTS_PER_KEYWORD=5
 GEMINI_TTS_VOICE_ES=Kore
 ```
 
 `GEMINI_QUALITY_REVIEW_MODE=video` uploads the downloaded local MP4 assets to Gemini for visual review. Use `metadata` when you only want a cheaper metadata-level gate.
+
+The final review uploads each rendered MP4 plus a contact sheet sampled at the midpoint of every caption. Automated Gemini review is a publication-safety screen, not a clinician sign-off.

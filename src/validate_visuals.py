@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,11 +15,14 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from generate_script import normalize_script_plan
 from pipeline_paths import PipelinePaths, build_pipeline_paths
 
 
 DEFAULT_REVIEW_MODEL = "gemini-2.5-flash"
 DEFAULT_MIN_VISUAL_SCORE = 4
+DEFAULT_MAX_SCRIPT_REVISIONS = 2
+DEFAULT_GEMINI_CALL_RETRIES = 5
 VIDEO_UPLOAD_TIMEOUT_SECONDS = 180
 VIDEO_UPLOAD_POLL_SECONDS = 5
 VALID_VIDEO_MODES = {"metadata", "video"}
@@ -84,6 +88,18 @@ def get_min_visual_score(min_score: Optional[int]) -> int:
         return DEFAULT_MIN_VISUAL_SCORE
 
 
+def get_max_script_revisions(max_revisions: Optional[int]) -> int:
+    """Resolve how many Gemini correction rounds may run before blocking."""
+    if max_revisions is not None:
+        return max(0, min(max_revisions, 4))
+
+    raw_value = os.getenv("GEMINI_MAX_SCRIPT_REVISIONS", str(DEFAULT_MAX_SCRIPT_REVISIONS))
+    try:
+        return max(0, min(int(raw_value), 4))
+    except ValueError:
+        return DEFAULT_MAX_SCRIPT_REVISIONS
+
+
 def get_gemini_client() -> genai.Client:
     """Create a Gemini client from GEMINI_API_KEY."""
     load_dotenv()
@@ -91,6 +107,15 @@ def get_gemini_client() -> genai.Client:
     if not api_key:
         raise EnvironmentError("Missing GEMINI_API_KEY in environment.")
     return genai.Client(api_key=api_key)
+
+
+def get_gemini_call_retries() -> int:
+    """Resolve transient API retry count while keeping calls bounded."""
+    raw_value = os.getenv("GEMINI_CALL_RETRIES", str(DEFAULT_GEMINI_CALL_RETRIES))
+    try:
+        return max(3, min(int(raw_value), 8))
+    except ValueError:
+        return DEFAULT_GEMINI_CALL_RETRIES
 
 
 def extract_text_response(response: Any) -> str:
@@ -102,7 +127,12 @@ def extract_text_response(response: Any) -> str:
     try:
         return response.candidates[0].content.parts[0].text.strip()
     except Exception as error:
-        raise ValueError("Gemini response did not include text.") from error
+        prompt_feedback = getattr(response, "prompt_feedback", None)
+        candidates = getattr(response, "candidates", None)
+        raise ValueError(
+            "Gemini response did not include text. "
+            f"prompt_feedback={prompt_feedback!r}, candidates={candidates!r}"
+        ) from error
 
 
 def parse_json_response(response_text: str) -> Dict[str, Any]:
@@ -125,16 +155,32 @@ def parse_json_response(response_text: str) -> Dict[str, Any]:
 
 
 def gemini_json(client: genai.Client, model: str, contents: Any) -> Dict[str, Any]:
-    """Call Gemini and parse a JSON object response."""
-    response = client.models.generate_content(
-        model=model,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            temperature=0.1,
-            response_mime_type="application/json",
-        ),
-    )
-    return parse_json_response(extract_text_response(response))
+    """Call Gemini with bounded retries and parse a JSON object response."""
+    last_error: Optional[Exception] = None
+    retries = get_gemini_call_retries()
+    for attempt in range(1, retries + 1):
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            return parse_json_response(extract_text_response(response))
+        except Exception as error:
+            last_error = error
+            if attempt >= retries:
+                break
+            wait_seconds = min(2 ** (attempt - 1), 8)
+            print(
+                f"Gemini request failed (attempt {attempt}/{retries}); "
+                f"retrying in {wait_seconds}s: {error}"
+            )
+            time.sleep(wait_seconds)
+
+    raise RuntimeError("Gemini request failed after retries.") from last_error
 
 
 def compact_script_for_review(script: Dict[str, Any]) -> Dict[str, Any]:
@@ -143,6 +189,8 @@ def compact_script_for_review(script: Dict[str, Any]) -> Dict[str, Any]:
         "title": script.get("title", ""),
         "language": script.get("language", ""),
         "narration": script.get("narration", ""),
+        "medical_sources": script.get("medical_sources", []),
+        "source_reference": script.get("source_reference", {}),
         "blocks": [
             {
                 "id": block.get("id", ""),
@@ -156,53 +204,217 @@ def compact_script_for_review(script: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_medical_review_prompt(script: Dict[str, Any]) -> str:
-    """Build a script-safety review prompt that does not request rewrites."""
+def build_medical_review_prompt(script: Dict[str, Any], reviewer_lens: str) -> str:
+    """Build one independent script review prompt for the requested lens."""
     payload = compact_script_for_review(script)
+    if reviewer_lens == "clinical_accuracy":
+        lens_instruction = (
+            "Act as a conservative pediatric clinical accuracy reviewer. Check every factual statement, "
+            "the distinction between common behavior and diagnosis, the urgency of red flags, and whether "
+            "the listed authoritative sources actually support the wording. Reject unsupported certainty, "
+            "unsafe home treatment, missing emergency advice, or invented thresholds."
+        )
+    else:
+        lens_instruction = (
+            "Act as a native-language patient education editor with medical safety training. Check natural "
+            "wording, encoding/mojibake, captions matching narration, age and symptom details, and whether a "
+            "translation strengthens or weakens any reassurance or warning. Reject ambiguous or misleading wording."
+        )
+
     return (
         "You are reviewing short-form patient education content before publication.\n"
-        "Do not rewrite, translate, or localize the script. The authored script is the source of truth.\n"
-        "Evaluate only: medical safety, unsupported claims, overdiagnosis, missing caution, dangerous advice, "
-        "language corruption, and whether visual keywords could imply a stronger medical claim than the narration.\n"
-        "Be conservative. Flag content that should be reviewed by a clinician. Return only JSON with this shape:\n"
+        f"{lens_instruction}\n"
+        "This pass reviews only; do not rewrite the script in this response. Be conservative and cite the exact "
+        "block and wording in every finding. Return only JSON with this shape:\n"
         "{\n"
         '  "review_type": "medical_script",\n'
+        '  "reviewer_lens": "",\n'
         '  "status": "approved | needs_revision | blocked",\n'
-        '  "score": 1,\n'
+        '  "score": 5,\n'
         '  "must_not_publish": false,\n'
         '  "summary": "",\n'
-        '  "language_quality": {"status": "approved | needs_revision", "notes": []},\n'
+        '  "checks": {\n'
+        '    "claims_supported": false,\n'
+        '    "reassurance_is_conditional": false,\n'
+        '    "red_flags_are_proportionate": false,\n'
+        '    "captions_match_narration": false,\n'
+        '    "language_is_natural_and_intact": false,\n'
+        '    "visual_keywords_are_safe": false\n'
+        "  },\n"
         '  "findings": [\n'
         '    {"severity": "critical | major | minor", "block_id": "", "issue": "", "evidence": "", "recommendation": ""}\n'
         "  ]\n"
         "}\n"
-        "Use score 5 for publishable with minor/no issues, 4 for acceptable with small improvements, "
-        "3 for needs revision, and 1-2 for blocked/unsafe.\n\n"
+        "Use score 5 for publication-ready with no meaningful issue, 4 for safe with only optional polish, "
+        "3 for mandatory revision, and 1-2 for blocked or unsafe. Status must be needs_revision for any "
+        "mandatory correction. Never return approved with score 1-3.\n\n"
         f"SCRIPT_JSON:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
+
+
+def combine_script_reviews(reviews: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Combine independent Gemini reviews using the most conservative result."""
+    statuses = [review.get("status") for review in reviews]
+    if any(review.get("must_not_publish") is True or status == "blocked" for review, status in zip(reviews, statuses)):
+        status = "blocked"
+    elif any(status == "needs_revision" for status in statuses):
+        status = "needs_revision"
+    else:
+        status = "approved"
+
+    findings = []
+    for review in reviews:
+        reviewer_lens = review.get("reviewer_lens", "unknown")
+        for finding in review.get("findings") or []:
+            finding_with_lens = dict(finding)
+            finding_with_lens["reviewer_lens"] = reviewer_lens
+            findings.append(finding_with_lens)
+
+    return {
+        "review_type": "medical_script_panel",
+        "status": status,
+        "score": min((coerce_score(review.get("score")) for review in reviews), default=0),
+        "must_not_publish": any(review.get("must_not_publish") is True for review in reviews),
+        "summary": " | ".join(str(review.get("summary", "")).strip() for review in reviews),
+        "reviews": reviews,
+        "findings": findings,
+    }
+
+
+def run_script_review_panel(
+    client: genai.Client,
+    model: str,
+    script: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Run independent clinical and language-integrity review passes."""
+    reviews = []
+    for reviewer_lens in ("clinical_accuracy", "language_integrity"):
+        print(f"Gemini script reviewer: {reviewer_lens}")
+        review = gemini_json(client, model, build_medical_review_prompt(script, reviewer_lens))
+        review["reviewer_lens"] = review.get("reviewer_lens") or reviewer_lens
+        reviews.append(review)
+    return combine_script_reviews(reviews)
+
+
+def build_script_revision_prompt(script: Dict[str, Any], panel_review: Dict[str, Any]) -> str:
+    """Ask Gemini to correct only issues found by the independent review panel."""
+    return (
+        "You are the senior pediatric patient-education editor. Correct every mandatory finding in the review "
+        "while preserving the topic, target language, block IDs, source URLs, calm tone, and short-form structure. "
+        "Do not add diagnosis, medication doses, treatment claims, or unsupported numerical thresholds. "
+        "Each caption must be a short phrase copied or faithfully condensed from its block narration. "
+        "Keep visual keywords concrete, literal, non-graphic, and written in English for stock-footage search. "
+        "Return a complete corrected script and a concise change log. Return only JSON with this shape:\n"
+        "{\n"
+        '  "revised_script": {"title": "", "language": "", "medical_sources": [], "source_reference": {}, "blocks": []},\n'
+        '  "changes": [{"block_id": "", "reason": "", "before": "", "after": ""}]\n'
+        "}\n\n"
+        f"CURRENT_SCRIPT:\n{json.dumps(compact_script_for_review(script), ensure_ascii=False, indent=2)}\n\n"
+        f"PANEL_REVIEW:\n{json.dumps(panel_review, ensure_ascii=False, indent=2)}"
+    )
+
+
+def revise_script(
+    client: genai.Client,
+    model: str,
+    script: Dict[str, Any],
+    panel_review: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Generate and validate one corrected script revision."""
+    revision_response = gemini_json(client, model, build_script_revision_prompt(script, panel_review))
+    revised_plan = revision_response.get("revised_script")
+    if not isinstance(revised_plan, dict):
+        raise ValueError("Gemini revision did not return a revised_script object.")
+
+    revised_plan["medical_sources"] = script.get("medical_sources", [])
+    revised_plan["source_reference"] = script.get("source_reference", {})
+    revised_plan.pop("narration", None)
+    revised_script = normalize_script_plan(revised_plan)
+
+    original_ids = [block.get("id") for block in script.get("blocks", [])]
+    revised_ids = [block.get("id") for block in revised_script.get("blocks", [])]
+    if revised_script.get("language") != script.get("language"):
+        raise ValueError("Gemini revision changed the script language.")
+    if revised_ids != original_ids:
+        raise ValueError("Gemini revision changed the authored block IDs or order.")
+
+    original_block_map = {block["id"]: block for block in script.get("blocks", [])}
+    for block in revised_script.get("blocks", []):
+        combined_avoid_visuals = []
+        seen = set()
+        for item in [
+            *original_block_map[block["id"]].get("avoid_visuals", []),
+            *block.get("avoid_visuals", []),
+        ]:
+            lowered = item.lower()
+            if lowered not in seen:
+                seen.add(lowered)
+                combined_avoid_visuals.append(item)
+        block["avoid_visuals"] = combined_avoid_visuals
+
+    return revised_script, revision_response
 
 
 def review_script_quality(
     paths: PipelinePaths,
     model: Optional[str] = None,
     fail_on_blocked: bool = True,
+    auto_revise: bool = True,
+    max_revisions: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Review normalized script quality and persist the report."""
+    """Review, automatically correct, and re-review a normalized script."""
     script = load_script(paths)
     resolved_model = get_review_model(model)
     client = get_gemini_client()
-    review = gemini_json(client, resolved_model, build_medical_review_prompt(script))
+    resolved_max_revisions = get_max_script_revisions(max_revisions) if auto_revise else 0
+
+    shutil.copy2(paths.script_file, paths.original_script_file)
+
+    history = []
+    review = {}
+    for revision_round in range(resolved_max_revisions + 1):
+        review = run_script_review_panel(client, resolved_model, script)
+        history_entry = {
+            "round": revision_round,
+            "script": script,
+            "review": review,
+            "revision": None,
+        }
+        history.append(history_entry)
+
+        if not is_script_blocked(review):
+            break
+        if revision_round >= resolved_max_revisions:
+            break
+
+        print(f"Gemini script correction round {revision_round + 1}/{resolved_max_revisions}")
+        script, revision_response = revise_script(client, resolved_model, script, review)
+        history_entry["revision"] = revision_response
+        save_json_file(paths.script_file, script)
+        paths.narration_text_file.write_text(script["narration"], encoding="utf-8")
+
+    save_json_file(
+        paths.script_revision_history_file,
+        {
+            "model": resolved_model,
+            "max_revisions": resolved_max_revisions,
+            "rounds": history,
+        },
+    )
     report = load_existing_report(paths)
 
     report.update(
         {
-            "version": 1,
+            "version": 2,
             "model": resolved_model,
             "script_file": str(paths.script_file),
+            "original_script_file": str(paths.original_script_file),
+            "script_revision_history_file": str(paths.script_revision_history_file),
             "assets_file": str(paths.assets_file),
         }
     )
     report["script_review"] = review
+    report["script_revision_count"] = sum(1 for entry in history if entry.get("revision"))
     report["summary"] = build_quality_summary(report, get_min_visual_score(None))
     save_json_file(paths.quality_review_file, report)
     print(f"Created {paths.quality_review_file}")
@@ -221,10 +433,10 @@ def is_script_blocked(review: Dict[str, Any]) -> bool:
         return True
     if coerce_score(review.get("score")) < 4:
         return True
-    language_quality = review.get("language_quality") or {}
-    if language_quality.get("status") == "needs_revision":
-        return True
-    return any(finding.get("severity") == "critical" for finding in review.get("findings", []))
+    return any(
+        finding.get("severity") in {"critical", "major"}
+        for finding in review.get("findings", [])
+    )
 
 
 def build_asset_lookup(assets: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -235,6 +447,24 @@ def build_asset_lookup(assets: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]
 def get_asset_path(paths: PipelinePaths, block_id: str) -> Path:
     """Return expected downloaded video path for a block."""
     return paths.assets_dir / f"{block_id}.mp4"
+
+
+def compact_asset_for_visual_review(asset: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Exclude rejected candidate metadata and unrelated descriptions from review input."""
+    if not asset:
+        return {}
+    fields = (
+        "block_id",
+        "keyword",
+        "pexels_video_id",
+        "pexels_page_url",
+        "duration",
+        "width",
+        "height",
+        "delivery_width",
+        "delivery_height",
+    )
+    return {field: asset.get(field) for field in fields if asset.get(field) is not None}
 
 
 def wait_for_uploaded_file(client: genai.Client, uploaded_file: Any) -> Any:
@@ -284,7 +514,7 @@ def build_visual_review_prompt(
             "visual_keywords": block.get("visual_keywords", []),
             "avoid_visuals": block.get("avoid_visuals", []),
         },
-        "selected_asset": asset or {},
+        "selected_asset": compact_asset_for_visual_review(asset),
         "local_video_path": str(video_path) if video_path else None,
     }
     mode_instruction = (
@@ -293,24 +523,31 @@ def build_visual_review_prompt(
         else "You are given only asset metadata, not the actual video. Be explicit that this is metadata-only."
     )
     return (
-        "You are a strict quality reviewer for a medical short-form video pipeline.\n"
+        "You are a strict quality reviewer for a legitimate, non-sexual pediatric health-education video. "
+        "The material concerns routine infant development, feeding observation, and caregiver safety.\n"
         f"{mode_instruction}\n"
-        "Compare the selected visual against the block narration and captions. Flag off-topic, "
-        "too alarming, graphic, misleading, diagnosis-implying, or medically unsupported visuals. "
+        "Inspect the full visible clip, not only its first frame. Compare the subject, approximate age group, "
+        "action, setting, emotional tone, and implied medical meaning against the block narration and captions. "
+        "A generic family or clinic clip is not a match when the block needs a specific observable action. "
+        "Flag off-topic, repetitive, too alarming, graphic, misleading, diagnosis-implying, or medically "
+        "unsupported visuals. Reject footage centered on adults, older children, procedures, distress, or "
+        "unrelated lifestyle activity when the script is about a calm infant behavior. "
         "Do not rewrite the script. Return only JSON with this shape:\n"
         "{\n"
         '  "review_type": "visual_match",\n'
         '  "block_id": "",\n'
         '  "status": "approved | needs_replacement | blocked",\n'
-        '  "match_score": 1,\n'
-        '  "medical_safety_score": 1,\n'
+        '  "match_score": 5,\n'
+        '  "medical_safety_score": 5,\n'
         '  "what_video_shows": "",\n'
         '  "summary": "",\n'
         '  "mismatch_reasons": [],\n'
         '  "suggested_keywords": [],\n'
         '  "avoid_visuals": []\n'
         "}\n"
-        "Use match_score 5 only when the footage clearly supports the block. Use 1-2 for unrelated footage.\n\n"
+        "Use match_score 5 only when the footage clearly and literally supports the block, 4 when it is a safe "
+        "close contextual match, 3 for generic or partly mismatched footage, and 1-2 for unrelated footage. "
+        "If status is approved, both scores must be 4 or 5. Never return approved with a score of 1-3.\n\n"
         f"REVIEW_JSON:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
 
@@ -371,15 +608,6 @@ def visual_review_failed(review: Dict[str, Any], min_score: int) -> bool:
     status = review.get("status")
     match_score = coerce_score(review.get("match_score"))
     medical_score = coerce_score(review.get("medical_safety_score"))
-    mismatch_reasons = review.get("mismatch_reasons") or []
-    inconsistent_approved_review = (
-        status == "approved"
-        and match_score >= min_score
-        and medical_score < min_score
-        and not mismatch_reasons
-    )
-    if inconsistent_approved_review:
-        return False
     return status in {"needs_replacement", "blocked"} or match_score < min_score or medical_score < min_score
 
 

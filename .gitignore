@@ -8,10 +8,36 @@
 *service-account*.json
 *.pem
 *.key
+*.p12
+*.pfx
 
 # Local content/source spreadsheets
 *.xlsx
 *.xls
+*.csv
+*.tsv
+
+# Authored production content stays local; retain only input format examples.
+input/*
+!input/script_plan.example.json
+!input/medical_qna.example.txt
+
+# Generated reports and media, regardless of their output directory.
+reports/
+*.docx
+*.pdf
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.avi
+*.mkv
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.srt
 
 # Virtual environments
 venv/
