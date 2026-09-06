@@ -127,11 +127,19 @@ def canonical_assets_exist(paths) -> bool:
     if not paths.script_file.exists() or not paths.assets_file.exists():
         return False
     script = json.loads(paths.script_file.read_text(encoding="utf-8"))
-    return all(
-        (paths.assets_dir / f"{block.get('id')}.mp4").exists()
+    assets = load_asset_map(paths)
+    return bool(script.get("blocks")) and all(
+        block.get("id") in assets and (paths.assets_dir / f"{block.get('id')}.mp4").is_file()
         for block in script.get("blocks", [])
-        if block.get("id")
     )
+
+
+def blocks_requiring_search(paths) -> List[str]:
+    """Retain selected metadata after interruption; missing files can be downloaded again."""
+    script = json.loads(paths.script_file.read_text(encoding="utf-8"))
+    assets = load_asset_map(paths)
+    return [block["id"] for block in script["blocks"]
+            if not (assets.get(block["id"]) or {}).get("download_url")]
 
 
 def review_rendered_output(paths, model: Optional[str], allow_failures: bool = False) -> None:
@@ -333,11 +341,18 @@ def main() -> None:
             synchronize_asset_metadata(paths)
             print("Resume: selected assets retained; current script and video bytes will be revalidated")
         else:
-            search_assets(
-                paths,
-                use_gemini_ranking=quality_review_enabled,
-                review_model=args.review_model,
-            )
+            pending = blocks_requiring_search(paths) if args.resume else None
+            if pending is None or pending:
+                rejected_ids = {str(entry["asset"]["pexels_video_id"])
+                                for entry in load_rejected_asset_history(paths)
+                                if (entry.get("asset") or {}).get("pexels_video_id") is not None}
+                search_assets(
+                    paths, block_ids=pending, excluded_video_ids=rejected_ids,
+                    use_gemini_ranking=quality_review_enabled, review_model=args.review_model,
+                )
+            else:
+                print("Resume: all selections retained; downloading missing files only")
+            synchronize_asset_metadata(paths)
         step += 1
 
         print(f"[{step}/{total_steps}] Download stock assets")

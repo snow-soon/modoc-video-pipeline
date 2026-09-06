@@ -128,6 +128,14 @@ def render_final_video(paths, resume: bool = False) -> str:
     atomic_json(paths.caption_layout_file, layout_report)
     if not layout_report["passed"]:
         raise ValueError("Caption geometry safety check failed.")
+    final_inputs = {"scenes": [file_digest(scene) for scene in scene_files],
+                    "audio": file_digest(paths.audio_file), "layout": file_digest(paths.caption_layout_file),
+                    "timing": file_digest(paths.timing_plan_file), "policy": policy}
+    proof_path = paths.output_dir / "render_verification.json"
+    if resume and cache.matches("render_final", final_inputs, [paths.final_video_file, proof_path]):
+        validate_render(paths.final_video_file, duration)
+        print(f"Resume: rendered video and verification evidence unchanged: {paths.final_video_file}")
+        return str(paths.final_video_file)
     concat = work / "scenes.ffconcat"
     concat.write_text("ffconcat version 1.0\n" + "".join(f"file '{scene.name}'\n" for scene in scene_files), encoding="ascii")
     temporary = work / "final.tmp.mp4"
@@ -144,6 +152,7 @@ def render_final_video(paths, resume: bool = False) -> str:
                          "caption_layout_sha256": file_digest(paths.caption_layout_file),
                          "timing_plan_sha256": file_digest(paths.timing_plan_file),
                          "elapsed_seconds": round(time.perf_counter() - started_at, 3), "resume_requested": resume})
-    atomic_json(paths.output_dir / "render_verification.json", verification)
+    atomic_json(proof_path, verification)
+    cache.record("render_final", final_inputs, [paths.final_video_file, proof_path])
     print(f"Created {paths.final_video_file}")
     return str(paths.final_video_file)

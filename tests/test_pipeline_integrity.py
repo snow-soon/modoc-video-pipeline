@@ -22,11 +22,11 @@ from generate_captions import build_timing_plan, generate_captions, validate_tim
 from download_assets import download_assets
 from search_assets import rank_candidates_with_gemini
 from generate_script import normalize_script_plan
-from generate_tts import extract_pcm, generate_tts, resolve_tts_voice, speech_segments, write_wave_atomic
+from generate_tts import build_speech_prompt, extract_pcm, generate_tts, resolve_tts_voice, speech_segments, write_wave_atomic
 from pipeline_paths import build_pipeline_paths
 from pipeline_state import StageCache, atomic_json, file_digest, fingerprint
 from prepare_multilingual import verification_passed
-from main import review_rendered_output
+from main import blocks_requiring_search, canonical_assets_exist, review_rendered_output
 from medical_evidence import ArticleText, collect_medical_evidence, fetch_reference, validate_source_url
 from review_final_video_medical import deterministic_video_checks, final_evidence_fingerprint, final_review_passed
 from validate_visuals import (
@@ -227,6 +227,28 @@ class ArtifactTests(unittest.TestCase):
         for malformed in ("{", "[]", '{"test": []}'):
             cache.path.write_text(malformed)
             self.assertFalse(cache.matches("test", {}, [path]))
+
+    def test_partial_asset_selection_survives_a_missing_download(self):
+        atomic_json(self.paths.script_file, script_fixture())
+        atomic_json(self.paths.assets_file, [{"block_id": "one", "download_url": "https://example.com/one.mp4"}])
+        self.assertEqual(blocks_requiring_search(self.paths), ["two"])
+        self.assertFalse(canonical_assets_exist(self.paths))
+        for block_id in ("one", "two"):
+            (self.paths.assets_dir / f"{block_id}.mp4").write_bytes(b"probe-checked-later")
+        self.assertFalse(canonical_assets_exist(self.paths), "Files without matching metadata are incomplete")
+        atomic_json(self.paths.assets_file, [{"block_id": block, "download_url": f"https://example.com/{block}.mp4"}
+                                           for block in ("one", "two")])
+        self.assertTrue(canonical_assets_exist(self.paths))
+        self.assertEqual(blocks_requiring_search(self.paths), [])
+
+    def test_tts_prompt_quotes_imperatives_without_changing_transcript(self):
+        for language, sentence in (("Korean", "이야기가 끝나면 잘 자라고 인사해 주세요."),
+                                   ("English", "When the story ends, say goodnight."),
+                                   ("Spanish", "Cuando termine el cuento, dale las buenas noches.")):
+            prompt = build_speech_prompt(sentence, language)
+            self.assertIn(language, prompt)
+            self.assertIn("Generate only speech audio", prompt)
+            self.assertEqual(prompt.split("TRANSCRIPT:\n", 1)[1], sentence)
 
     @patch("validate_visuals.collect_medical_evidence", return_value={"retrieved_count": 1})
     def test_script_approval_bound_to_script_and_model(self, collect):
@@ -435,8 +457,13 @@ class FFmpegIntegrationTests(unittest.TestCase):
                     self.assertGreater(int(white.sum()), 100)
                     self.assertFalse(white[1560:].any(), language)
                 with patch("render_ffmpeg.run_ffmpeg", wraps=__import__("render_ffmpeg").run_ffmpeg) as runner:
+                    before = file_digest(paths.output_dir / "render_verification.json")
                     render_final_video(paths, resume=True)
-                    self.assertEqual(runner.call_count, 1, "Resume should only mux already rendered scenes")
+                    self.assertEqual(runner.call_count, 0, "Resume must preserve already verified final bytes")
+                    self.assertEqual(before, file_digest(paths.output_dir / "render_verification.json"))
+                paths.final_video_file.write_bytes(b"corrupt")
+                render_final_video(paths, resume=True)
+                self.assertTrue(deterministic_video_checks(paths.output_dir)["passed"])
 
 
 if __name__ == "__main__":
